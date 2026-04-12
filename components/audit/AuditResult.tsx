@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { AuditResult as AuditResultType, AuditLine } from "@/lib/types";
 import { generateResultImage } from "@/lib/share/generate-result-image";
+import { trackShareClicked } from "@/lib/analytics";
 
 // ── formatting helpers ────────────────────────────────────────────────────────
 
@@ -218,19 +219,19 @@ export function AuditResult({
         : "Meu holerite está correto! Confira pelo Tá Certo?";
 
       if (navigator.canShare?.({ files: [file] })) {
-        // native share sheet with image (WhatsApp, etc.)
         await navigator.share({ title: "Tá Certo? — Resultado", text, files: [file], url });
+        trackShareClicked("native");
       } else if (navigator.share) {
-        // native share without file (URL only)
         await navigator.share({ title: "Tá Certo?", text, url });
+        trackShareClicked("native");
       } else {
-        // desktop fallback: download the image
         const objUrl = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = objUrl;
         a.download = "resultado-holerite.png";
         a.click();
         URL.revokeObjectURL(objUrl);
+        trackShareClicked("download");
       }
 
       setShareStatus("done");
@@ -405,6 +406,16 @@ export function AuditResult({
 
           <p className="text-center text-xs text-gray-400 pt-1 pb-2">
             Auditoria feita em {fmtDatetime(auditDate)}
+          </p>
+
+          <p className="text-[11px] text-gray-400 leading-relaxed text-center border-t border-gray-100 pt-4 pb-2">
+            Este aplicativo realiza cálculos com base na legislação trabalhista vigente (CLT)
+            e nas tabelas oficiais de INSS e IRRF. Os resultados são estimativas e{" "}
+            <strong className="font-medium text-gray-500">
+              não constituem assessoria jurídica ou contábil.
+            </strong>{" "}
+            Em caso de divergência, consulte o sindicato da sua categoria ou um profissional
+            especializado.
           </p>
         </div>
       </div>

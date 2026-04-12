@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CtaLink } from "@/components/landing/CtaLink";
 
 // Estatísticas — substituir por dados reais via DB quando houver volume
 const STATS = {
@@ -42,13 +43,14 @@ export default function LandingPage() {
             Descubra em 30 segundos.
           </p>
 
-          <Link
+          <CtaLink
             href="/audit/new"
+            location="hero"
             className="mt-8 block w-full rounded-2xl bg-[#16A34A] py-4 text-base font-bold text-white
                        hover:bg-green-700 active:bg-green-800 transition-colors shadow-lg shadow-green-200"
           >
             Auditar meu holerite agora — grátis
-          </Link>
+          </CtaLink>
 
           {/* social counter */}
           <p className="mt-4 text-sm text-gray-400">
@@ -103,13 +105,14 @@ export default function LandingPage() {
             </ol>
 
             <div className="mt-10 text-center">
-              <Link
+              <CtaLink
                 href="/audit/new"
+                location="how_it_works"
                 className="inline-block rounded-2xl bg-[#16A34A] px-8 py-3.5 text-sm font-bold text-white
                            hover:bg-green-700 transition-colors"
               >
                 Começar agora — grátis
-              </Link>
+              </CtaLink>
             </div>
           </div>
         </section>
@@ -213,13 +216,14 @@ export default function LandingPage() {
                     </li>
                   ))}
                 </ul>
-                <Link
+                <CtaLink
                   href="/audit/new"
+                  location="pricing"
                   className="mt-6 block text-center rounded-xl bg-[#16A34A] py-3 text-sm font-bold text-white
                              hover:bg-green-700 transition-colors"
                 >
                   Começar agora
-                </Link>
+                </CtaLink>
               </div>
 
               {/* Pro */}
@@ -272,13 +276,14 @@ export default function LandingPage() {
           <p className="text-gray-500 text-sm mb-8">
             Em média, trabalhadores com erros no holerite perdem R$&nbsp;156/mês sem saber.
           </p>
-          <Link
+          <CtaLink
             href="/audit/new"
+            location="final"
             className="block rounded-2xl bg-[#DC2626] py-4 text-base font-bold text-white
                        hover:bg-red-700 active:bg-red-800 transition-colors shadow-lg shadow-red-100"
           >
             Descobrir agora — é grátis
-          </Link>
+          </CtaLink>
           <p className="mt-3 text-xs text-gray-400">Sem cadastro. Resultado em 30 segundos.</p>
         </section>
 

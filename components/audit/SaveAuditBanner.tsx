@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { trackSaveClicked } from "@/lib/analytics";
 
 export function SaveAuditBanner() {
   return (
@@ -16,6 +17,7 @@ export function SaveAuditBanner() {
       </div>
       <Link
         href="/login?next=/save-pending"
+        onClick={trackSaveClicked}
         className="flex-shrink-0 rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white
                    hover:bg-amber-700 active:bg-amber-800 transition-colors text-center"
       >

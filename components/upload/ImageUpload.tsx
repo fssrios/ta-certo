@@ -9,6 +9,7 @@ import {
   incrementAuditCount,
   savePendingAudit,
 } from "@/lib/utils/audit-quota";
+import { trackAuditCompleted } from "@/lib/analytics";
 import type { HoleriteAnalisado, AuditResult } from "@/lib/types";
 
 // ── Tipos ──────────────────────────────────────────────────────────────────
@@ -229,6 +230,7 @@ export function ImageUpload() {
       // Fluxo anônimo: salva no localStorage e redireciona
       savePendingAudit({ analisado, result: auditResult });
       incrementAuditCount();
+      trackAuditCompleted({ hasErrors: auditResult.summary.total_errors > 0, errorCount: auditResult.summary.total_errors, saved: false });
       router.push("/resultado");
     } else {
       // Fluxo autenticado: persiste no banco
@@ -244,6 +246,7 @@ export function ImageUpload() {
         return;
       }
       const { id } = (await saveRes.json()) as { id: string };
+      trackAuditCompleted({ hasErrors: auditResult.summary.total_errors > 0, errorCount: auditResult.summary.total_errors, saved: true });
       router.push(`/audit/${id}`);
     }
   }
