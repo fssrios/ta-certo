@@ -14,6 +14,8 @@ export interface Holerite {
   /** Formato "MM/AAAA" ex.: "03/2026" */
   competencia: string;
   dependentes: number;
+  /** Horas mensais contratuais — determina o valor-hora para HE e noturno */
+  horasMensais: number;
 
   // ── Parâmetros do mês (necessários para cálculo de DSR) ───────────────────
   /** Dias úteis (seg–sáb) no mês de referência. Padrão: 22 */

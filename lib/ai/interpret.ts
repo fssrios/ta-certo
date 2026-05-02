@@ -40,6 +40,20 @@ TIPOS VÁLIDOS para "type":
   vale_transporte, vale_refeicao, vale_alimentacao, plano_saude,
   outros_creditos, outros_descontos
 
+MAPEAMENTO OBRIGATÓRIO de descrição → type (use EXATAMENTE este type, independente da redação):
+  "INSS", "Contribuição INSS", "Prev. Social", "INSS s/ salário" → type: "inss"
+  "IRRF", "IR", "Imposto de Renda", "IR Fonte", "IRF", "IRRF s/ salário",
+    "IRRF 1 dependente", "IRRF 2 dependentes", "IRRF s/ Rendimentos" → type: "irrf"
+  "Vale Transporte", "VT", "Desconto VT", "Vale-Transporte" → type: "vale_transporte"
+  "Vale Refeição", "VR", "Vale-Refeição" → type: "vale_refeicao"
+  "Vale Alimentação", "VA", "Vale-Alimentação" → type: "vale_alimentacao"
+  "FGTS", "Dep. FGTS", "Fundo de Garantia" → type: "fgts"
+  "Salário Base", "Salário", "Salário Mensal", "Salário Contratual", "Vencimento" → type: "salario_base"
+
+ATENÇÃO: "IRRF 1 dependente", "IRRF 2 dep.", "IRRF s/ 1 dep." e variantes similares
+são SEMPRE type: "irrf" — o número de dependentes na descrição não muda o tipo.
+Extraia esse número para o campo "dependents" do objeto raiz se for diferente do já encontrado.
+
 REGRAS de kind:
   - "credit": salario_base, hora_extra_*, adicional_noturno, dsr*, ferias,
               adicional_ferias, decimo_terceiro, insalubridade, periculosidade, outros_creditos

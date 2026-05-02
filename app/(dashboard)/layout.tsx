@@ -11,23 +11,32 @@ export default async function DashboardLayout({
   const { data: { user } } = await supabase.auth.getUser();
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#F9FAFB]">
-      <header className="bg-white border-b px-5 py-3 flex items-center justify-between sticky top-0 z-10">
+    <div className="min-h-screen flex flex-col bg-tc-bg">
+      <header className="bg-tc-paper border-b border-tc-line px-5 sm:px-10 py-4 flex items-center justify-between sticky top-0 z-10">
         <Link
           href={user ? "/dashboard" : "/"}
-          className="font-bold text-green-700 text-lg tracking-tight"
+          className="flex items-center gap-3"
         >
-          Tá Certo?
+          <div className="w-8 h-8 bg-tc-green text-tc-paper rounded-lg grid place-items-center font-display font-semibold text-base">
+            tc
+          </div>
+          <span className="font-display text-lg font-medium tracking-tight">Tá Certo.</span>
         </Link>
 
         <div className="flex items-center gap-4 text-sm">
           {user ? (
             <>
-              <span className="hidden sm:block text-gray-400 truncate max-w-[180px]">
+              <span className="hidden sm:block text-tc-muted text-xs truncate max-w-[180px]">
                 {user.email}
               </span>
+              <Link
+                href="/audit/new"
+                className="bg-tc-green text-tc-paper rounded-full px-4 py-2 text-xs font-semibold hover:bg-[#245038] transition-colors"
+              >
+                + Novo holerite
+              </Link>
               <form action={signOut}>
-                <button type="submit" className="text-gray-500 hover:text-gray-700 transition-colors">
+                <button type="submit" className="text-tc-muted hover:text-tc-ink text-xs transition-colors">
                   Sair
                 </button>
               </form>
@@ -35,7 +44,7 @@ export default async function DashboardLayout({
           ) : (
             <Link
               href="/login"
-              className="rounded-lg bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-700 transition-colors"
+              className="bg-tc-green text-tc-paper rounded-full px-4 py-2 text-xs font-semibold hover:bg-[#245038] transition-colors"
             >
               Entrar
             </Link>
@@ -43,7 +52,7 @@ export default async function DashboardLayout({
         </div>
       </header>
 
-      <main className="flex-1 px-4 py-8 max-w-2xl mx-auto w-full">
+      <main className="flex-1 px-4 py-10 max-w-3xl mx-auto w-full">
         {children}
       </main>
     </div>

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { trackLandingCTA } from "@/lib/analytics";
 
-type Location = "hero" | "how_it_works" | "pricing" | "final";
+type Location = "hero" | "how_it_works" | "pricing" | "final" | "header";
 
 export function CtaLink({
   href,
@@ -17,7 +17,11 @@ export function CtaLink({
   children: React.ReactNode;
 }) {
   return (
-    <Link href={href} onClick={() => trackLandingCTA(location)} className={className}>
+    <Link
+      href={href}
+      onClick={() => trackLandingCTA(location)}
+      className={className}
+    >
       {children}
     </Link>
   );

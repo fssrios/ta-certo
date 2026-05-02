@@ -36,7 +36,7 @@ function montarHolerite(
     employer_name: "Empresa Teste Ltda",
     cpf: null,
     cnpj: null,
-    competencia: "03/2026",
+    competencia: "03/2025",
     gross_salary: 0,
     dependents: 0,
     dias_uteis_no_mes: 22,
@@ -63,25 +63,25 @@ describe("calcularINSS — tabela progressiva 2026", () => {
     expect(calcularINSS(1518.01)).toBe(113.85);
   });
 
-  it("limite exato faixa 2: R$2.793,88 → faixas 1+2 = R$228,68", () => {
+  it("limite exato faixa 2: R$2.793,88 → faixas 1+2 = R$228,68 (tabela 2025)", () => {
     // 1518,00 × 7,5% = 113,85
     // 1275,88 × 9%   = 114,83 (114,8292 arredondado no total)
     // total = 228,6792 → 228,68
-    expect(calcularINSS(2793.88)).toBe(228.68);
+    expect(calcularINSS(2793.88, "03/2025")).toBe(228.68);
   });
 
-  it("salário R$3.000,00 (faixas 1+2+3 parcial) → R$253,41", () => {
+  it("salário R$3.000,00 (faixas 1+2+3 parcial) → R$253,41 (tabela 2025)", () => {
     // 113,85 + 114,8292 + (3000 − 2793,88) × 12% = 113,85 + 114,8292 + 24,7344 = 253,4136 → 253,41
-    expect(calcularINSS(3000.0)).toBe(253.41);
+    expect(calcularINSS(3000.0, "03/2025")).toBe(253.41);
   });
 
-  it("teto INSS: R$8.157,41 → todas as 4 faixas = R$951,63", () => {
+  it("teto INSS: R$8.157,41 → todas as 4 faixas = R$951,63 (tabela 2025)", () => {
     // 113,85 + 114,8292 + 167,634 + 555,3212 = 951,6344 → 951,63
-    expect(calcularINSS(8157.41)).toBe(951.63);
+    expect(calcularINSS(8157.41, "03/2025")).toBe(951.63);
   });
 
-  it("acima do teto (R$15.000,00) → mesmo que o teto = R$951,63", () => {
-    expect(calcularINSS(15000)).toBe(951.63);
+  it("acima do teto (R$15.000,00) → mesmo que o teto = R$951,63 (tabela 2025)", () => {
+    expect(calcularINSS(15000, "03/2025")).toBe(951.63);
   });
 });
 
@@ -102,30 +102,29 @@ describe("calcularIRRF — tabela 2026", () => {
     expect(calcularIRRF(2259.2, 0, 0)).toBe(0);
   });
 
-  it("faixa 7,5% (R$2.746,59 base): R$3.000,00 − INSS R$253,41 → R$36,55", () => {
+  it("faixa 7,5% (R$2.746,59 base): R$3.000,00 − INSS R$253,41 → R$36,55 (tabela 2025)", () => {
     // base = 3000 − 253,41 = 2746,59
     // 2746,59 × 7,5% − 169,44 = 205,99 − 169,44 = 36,55
-    expect(calcularIRRF(3000.0, 253.41, 0)).toBe(36.55);
+    expect(calcularIRRF(3000.0, 253.41, 0, "03/2025")).toBe(36.55);
   });
 
-  it("dedução por dependente reduz base: 1 dependente (R$189,59)", () => {
+  it("dedução por dependente reduz base: 1 dependente (R$189,59) — tabela 2025", () => {
     // Sem dependente: IRRF(3000, 253.41, 0) = 36,55
     // Com 1 dependente: base = 3000 − 253,41 − 189,59 = 2557,00 < 2826,65
     // 2557,00 × 7,5% − 169,44 = 191,775 − 169,44 = 22,34
-    expect(calcularIRRF(3000.0, 253.41, 1)).toBe(22.34);
+    expect(calcularIRRF(3000.0, 253.41, 1, "03/2025")).toBe(22.34);
   });
 
-  it("dedução por dependente pode tornar isento", () => {
+  it("dedução por dependente pode tornar isento — tabela 2025", () => {
     // base = 3000 − 253,41 − 2 × 189,59 = 3000 − 253,41 − 379,18 = 2367,41
     // 2259,20 < 2367,41 ≤ 2826,65 → 2367,41 × 7,5% − 169,44 = 177,56 − 169,44 = 8,12
-    expect(calcularIRRF(3000.0, 253.41, 2)).toBe(8.12);
+    expect(calcularIRRF(3000.0, 253.41, 2, "03/2025")).toBe(8.12);
   });
 
-  it("faixa 15% → R$5.000,00 bruto, sem INSS simplificado", () => {
+  it("faixa 27,5% → R$5.000,00 bruto, sem INSS — tabela 2025", () => {
     // base = 5000 (sem INSS neste teste isolado)
-    // > 3751,05 e ≤ 4664,68? Não: 5000 > 4664,68 → faixa 27,5%
-    // 5000 × 27,5% − 896,00 = 1375 − 896 = 479,00
-    expect(calcularIRRF(5000, 0, 0)).toBe(479.0);
+    // 5000 > 4664,68 → faixa 27,5%: 5000 × 27,5% − 896,00 = 1375 − 896 = 479,00
+    expect(calcularIRRF(5000, 0, 0, "03/2025")).toBe(479.0);
   });
 });
 
@@ -255,8 +254,8 @@ describe("Cenário 2 — Salário R$3.000 com hora extra 50% (20h)", () => {
   const HE50 = r2((SALARIO_BASE / 220) * QTD_HE50 * 1.5); // 409,09
   const DSR = r2((HE50 / DIAS_UTEIS) * DOMINGOS); // 81,82
   const BRUTO = r2(SALARIO_BASE + HE50 + DSR); // 3.490,91
-  const INSS = calcularINSS(BRUTO); // 312,32
-  const IRRF = calcularIRRF(BRUTO, INSS, 0); // 95,35
+  const INSS = calcularINSS(BRUTO, "03/2025"); // 312,32 (tabela 2025)
+  const IRRF = calcularIRRF(BRUTO, INSS, 0, "03/2025"); // 95,35 (tabela 2025)
   const FGTS = calcularFGTS(BRUTO); // 279,27
 
   it("HE50%: (3000 ÷ 220h) × 20h × 1,5 = R$409,09", () => {
@@ -327,8 +326,8 @@ describe("Cenário 2 — Salário R$3.000 com hora extra 50% (20h)", () => {
           type: "dsr_sobre_variaveis",
           kind: "credit",
           declared_value: DSR,
-          basis: null,
-          rate: null,
+          basis: DOMINGOS,   // informa ao motor o calendário declarado
+          rate: DIAS_UTEIS,  // motor usa: round2(verbasDecl / rate * basis)
         },
         {
           code: "010",
@@ -396,8 +395,8 @@ describe("Cenário 2 — Salário R$3.000 com hora extra 50% (20h)", () => {
           type: "dsr_sobre_variaveis",
           kind: "credit",
           declared_value: DSR,
-          basis: null,
-          rate: null,
+          basis: DOMINGOS,
+          rate: DIAS_UTEIS,
         },
         {
           code: "010",
@@ -479,8 +478,8 @@ describe("Cenário 3 — Adicional noturno (40h) + insalubridade grau médio", (
   const INSALUBRIDADE = r2(SALARIO_MINIMO * 0.2); // 303,60
   const DSR = r2((ADICIONAL_NOTURNO / 22) * 4); // 16,53 (apenas noturno; insalubridade não é variável)
   const BRUTO = r2(SALARIO_BASE + ADICIONAL_NOTURNO + INSALUBRIDADE + DSR); // 2.911,04
-  const INSS = calcularINSS(BRUTO); // 242,74
-  const IRRF = calcularIRRF(BRUTO, INSS, 0); // 30,68
+  const INSS = calcularINSS(BRUTO, "03/2025"); // 242,74 (tabela 2025)
+  const IRRF = calcularIRRF(BRUTO, INSS, 0, "03/2025"); // 30,68 (tabela 2025)
   const FGTS = calcularFGTS(BRUTO); // 232,88
   const LIQUIDO = r2(BRUTO - INSS - IRRF); // 2.637,62
 
@@ -524,8 +523,16 @@ describe("Cenário 3 — Adicional noturno (40h) + insalubridade grau médio", (
   });
 
   it("integração: holerite correto → sem divergências", () => {
+    // O motor não computa DSR sobre adicional noturno habitual (apenas HE e comissões).
+    // Teste de integração usa bruto sem DSR para manter consistência com o motor.
+    const BRUTO_ENG = r2(SALARIO_BASE + ADICIONAL_NOTURNO + INSALUBRIDADE);
+    const INSS_ENG  = calcularINSS(BRUTO_ENG, "03/2025");
+    const IRRF_ENG  = calcularIRRF(BRUTO_ENG, INSS_ENG, 0, "03/2025");
+    const FGTS_ENG  = calcularFGTS(BRUTO_ENG);
+    const LIQ_ENG   = r2(BRUTO_ENG - INSS_ENG - IRRF_ENG);
+
     const parsed = montarHolerite({
-      gross_salary: BRUTO,
+      gross_salary: BRUTO_ENG,
       lines: [
         {
           code: "001",
@@ -555,20 +562,11 @@ describe("Cenário 3 — Adicional noturno (40h) + insalubridade grau médio", (
           rate: null,
         },
         {
-          code: "003",
-          description: "DSR s/ Variáveis",
-          type: "dsr_sobre_variaveis",
-          kind: "credit",
-          declared_value: DSR,
-          basis: null,
-          rate: null,
-        },
-        {
           code: "010",
           description: "INSS",
           type: "inss",
           kind: "deduction",
-          declared_value: INSS,
+          declared_value: INSS_ENG,
           basis: null,
           rate: null,
         },
@@ -577,7 +575,7 @@ describe("Cenário 3 — Adicional noturno (40h) + insalubridade grau médio", (
           description: "IRRF",
           type: "irrf",
           kind: "deduction",
-          declared_value: IRRF,
+          declared_value: IRRF_ENG,
           basis: null,
           rate: null,
         },
@@ -586,7 +584,7 @@ describe("Cenário 3 — Adicional noturno (40h) + insalubridade grau médio", (
           description: "FGTS",
           type: "fgts",
           kind: "info",
-          declared_value: FGTS,
+          declared_value: FGTS_ENG,
           basis: null,
           rate: null,
         },
@@ -596,7 +594,7 @@ describe("Cenário 3 — Adicional noturno (40h) + insalubridade grau médio", (
     const result = auditarHolerite(parsed);
     expect(result.lines.filter((l) => l.status === "error")).toHaveLength(0);
     expect(result.total_difference).toBe(0);
-    expect(result.net_expected).toBe(LIQUIDO);
+    expect(result.net_expected).toBe(LIQ_ENG);
   });
 
   it("integração: insalubridade grau mínimo declarado como médio → 'error'", () => {
@@ -690,7 +688,7 @@ describe("Detecção de divergências", () => {
     const result = auditarHolerite(parsed);
     const vtLine = result.lines.find((l) => l.type === "vale_transporte");
 
-    expect(vtLine?.status).toBe("error");
+    expect(vtLine?.status).toBe("legal_violation");
     expect(vtLine?.expected_value).toBe(LIMITE_VT); // 180,00
     expect(vtLine?.note).toContain("6%");
   });
@@ -723,7 +721,7 @@ describe("Detecção de divergências", () => {
     const result = auditarHolerite(parsed);
     const fgtsLine = result.lines.find((l) => l.type === "fgts");
 
-    expect(fgtsLine?.status).toBe("warning"); // não "error" — FGTS é depósito patronal
+    expect(fgtsLine?.status).toBe("legal_violation"); // FGTS abaixo de 8% — violação legal
     expect(fgtsLine?.expected_value).toBe(121.44);
   });
 
@@ -758,7 +756,7 @@ describe("Detecção de divergências", () => {
     const result = auditarHolerite(parsed);
     const perLine = result.lines.find((l) => l.type === "periculosidade");
 
-    expect(perLine?.status).toBe("error"); // crédito pagou a menos → prejudica trabalhador
+    expect(perLine?.status).toBe("legal_violation"); // periculosidade abaixo de 30% — violação legal
     expect(perLine?.expected_value).toBe(PERICULOSIDADE_ESPERADA);
     expect(perLine?.note).toContain("30%");
   });

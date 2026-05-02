@@ -183,7 +183,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Callout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-amber-800 text-sm mt-3">
+    <div className="rounded-xl px-4 py-3 text-sm mt-3" style={{ background: "rgba(26,75,139,0.07)", border: "1px solid rgba(26,75,139,0.25)", color: "#1A4B8B" }}>
       {children}
     </div>
   );

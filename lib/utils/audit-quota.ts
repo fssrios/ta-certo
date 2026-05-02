@@ -5,23 +5,7 @@
 
 import type { HoleriteAnalisado, AuditResult } from "@/lib/types";
 
-const COUNT_KEY   = "tacerto_audit_count";
 const PENDING_KEY = "tacerto_pending_audit";
-
-// ── Quota ─────────────────────────────────────────────────────────────────────
-
-export function getAuditCount(): number {
-  if (typeof window === "undefined") return 0;
-  return parseInt(localStorage.getItem(COUNT_KEY) ?? "0", 10);
-}
-
-export function hasUsedFreeAudit(): boolean {
-  return getAuditCount() >= 1;
-}
-
-export function incrementAuditCount(): void {
-  localStorage.setItem(COUNT_KEY, String(getAuditCount() + 1));
-}
 
 // ── Auditoria pendente (salvar após login) ────────────────────────────────────
 

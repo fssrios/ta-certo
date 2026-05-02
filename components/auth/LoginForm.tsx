@@ -21,7 +21,6 @@ export function LoginForm({
     params.error ? "Link inválido ou expirado. Tente novamente." : ""
   );
 
-  const isQuotaGate = params.reason === "quota";
   const nextPath = params.next ?? "/dashboard";
 
   async function handleSubmit(e: React.FormEvent) {
@@ -47,69 +46,66 @@ export function LoginForm({
 
   if (sent) {
     return (
-      <div className="bg-white rounded-2xl border p-8 text-center shadow-sm">
-        <p className="text-3xl mb-3">📬</p>
-        <h2 className="font-semibold text-gray-900">Verifique seu email</h2>
-        <p className="text-sm text-gray-500 mt-2">
-          Enviamos um link de acesso para <strong>{email}</strong>.
-          Clique no link para entrar.
-        </p>
-        <button
-          onClick={() => { setSent(false); setEmail(""); }}
-          className="mt-5 text-sm text-green-600 underline"
-        >
-          Usar outro email
-        </button>
+      <div className="bg-tc-paper border-[1.5px] border-tc-green rounded-2xl p-6 flex items-start gap-4">
+        <div className="w-10 h-10 bg-tc-green text-tc-paper rounded-xl grid place-items-center flex-shrink-0">
+          <svg width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+        <div>
+          <div className="font-display text-xl font-medium">Link enviado</div>
+          <div className="text-sm text-tc-muted mt-1">
+            Confira <strong className="text-tc-ink">{email || "seu e-mail"}</strong> — expira em 15 minutos.
+          </div>
+          <button
+            className="mt-3 text-sm text-tc-accent font-semibold hover:underline"
+            onClick={() => { setSent(false); setEmail(""); }}
+          >
+            Usar outro email
+          </button>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      {isQuotaGate && (
-        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm">
-          <p className="font-semibold text-amber-900">Primeira auditoria gratuita usada</p>
-          <p className="text-amber-700 mt-0.5">
-            Entre na sua conta para continuar auditando seus holerites.
-          </p>
+    <form onSubmit={handleSubmit} className="space-y-3">
+      <div>
+        <label htmlFor="email" className="block text-sm font-semibold mb-2">
+          E-mail
+        </label>
+        <input
+          id="email"
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="voce@email.com"
+          required
+          autoFocus
+          className="w-full px-4 py-3.5 border-[1.5px] border-tc-line bg-tc-paper rounded-xl text-sm outline-none focus:border-tc-green transition-colors font-body"
+        />
+      </div>
+
+      {error && (
+        <div className="text-sm text-tc-coral bg-tc-coral/10 border border-tc-coral/30 rounded-xl px-4 py-3">
+          {error}
         </div>
       )}
 
-      <form
-        onSubmit={handleSubmit}
-        className="bg-white rounded-2xl border p-8 shadow-sm space-y-4"
+      <button
+        type="submit"
+        disabled={loading || !email}
+        className="w-full bg-tc-green text-tc-paper rounded-full py-3.5 text-sm font-semibold hover:bg-[#245038] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
       >
-        <div>
-          <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-            Email
-          </label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="seu@email.com"
-            required
-            className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent"
-          />
-        </div>
-
-        {error && (
-          <p className="text-sm text-red-600 bg-red-50 rounded-lg px-3 py-2">{error}</p>
+        {loading ? "Enviando…" : (
+          <>
+            Enviar link seguro
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </>
         )}
-
-        <button
-          type="submit"
-          disabled={loading || !email}
-          className="w-full rounded-lg bg-green-600 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
-          {loading ? "Enviando…" : "Enviar link de acesso"}
-        </button>
-
-        <p className="text-xs text-gray-400 text-center">
-          Sem senha. Só clicar no link que chega no email.
-        </p>
-      </form>
-    </div>
+      </button>
+    </form>
   );
 }

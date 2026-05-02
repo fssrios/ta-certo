@@ -1,13 +1,20 @@
 import type { Metadata } from "next";
-import { Inter, Geist } from "next/font/google";
+import { Fraunces, Manrope } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
-import { cn } from "@/lib/utils";
 
-const geist = Geist({subsets:['latin'],variable:'--font-sans'});
+const fraunces = Fraunces({
+  subsets: ["latin"],
+  variable: "--font-display",
+  display: "swap",
+});
 
-const inter = Inter({ subsets: ["latin"] });
+const manrope = Manrope({
+  subsets: ["latin"],
+  variable: "--font-body",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Tá Certo? — Auditor de Holerite CLT",
@@ -21,8 +28,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR" className={cn("font-sans", geist.variable)}>
-      <body className={inter.className}>
+    <html lang="pt-BR">
+      <body className={`${fraunces.variable} ${manrope.variable} font-body antialiased`}>
         {children}
         <Analytics />
         <SpeedInsights />

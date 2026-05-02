@@ -176,7 +176,7 @@ export async function generateResultImage(data: ShareImageData): Promise<Blob> {
 
       ctx.textAlign = "right";
       ctx.font = isNet ? `700 28px ${FONT}` : `400 26px ${FONT}`;
-      ctx.fillStyle = ok ? "rgba(255,255,255,0.90)" : isNet ? "#FFFFFF" : "#FCA5A5";
+      ctx.fillStyle = ok ? "rgba(255,255,255,0.90)" : isNet ? "#FFFFFF" : "#F28B8B";
       ctx.fillText(brl(row.exp), xExpR, ry);
     });
 

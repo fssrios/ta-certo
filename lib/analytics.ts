@@ -25,7 +25,7 @@ export function trackShareClicked(method: "native" | "download" | "clipboard") {
 }
 
 /** Usuário clicou em qualquer CTA da landing page. */
-export function trackLandingCTA(location: "hero" | "how_it_works" | "pricing" | "final") {
+export function trackLandingCTA(location: "hero" | "how_it_works" | "pricing" | "final" | "header") {
   track("landing_cta_clicked", { location });
 }
 
