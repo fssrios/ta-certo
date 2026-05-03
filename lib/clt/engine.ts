@@ -23,6 +23,11 @@ import { calcularIRRF } from "./irrf";
 import { calcularIRRF_PLR, getFaixaPLR } from "./irrf-plr";
 import { calcularFGTS } from "./fgts";
 
+/** Remove acentuação para casamento de regex robusto contra encoding Unicode. */
+function semAcento(s: string): string {
+  return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
 // ── Constantes ──────────────────────────────────────────────────────────────
 
 /** Tolerância de arredondamento bancário (R$ 0,05) */
@@ -646,17 +651,39 @@ function addDiasData(d: Date, dias: number): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate() + dias);
 }
 
+/**
+ * Calcula dias de aviso prévio conforme tabela MTE Nota Técnica 184/2012.
+ *
+ * Lei 12.506/2011 Art. 1º + parágrafo único:
+ * - Até 1 ano completo: 30 dias
+ * - A partir do 1º ano completo: +3 dias por ano completo adicional
+ * - Máximo: 90 dias (atingido com 21 anos completos)
+ *
+ * Fórmula: 30 + max(0, anosCompletos - 1) × 3, capped at 90.
+ *
+ * Exemplos: 0→30, 1→30, 2→33, 7→48, 8→51, 21→90.
+ */
+function calcularDiasAvisoPrevio(anosCompletos: number): number {
+  if (anosCompletos < 1) return 30;
+  return Math.min(30 + (anosCompletos - 1) * 3, 90);
+}
+
 // ── Rescisão: reconhecimento de verbas ───────────────────────────────────────
 
-const RSC_SALDO_RE     = /saldo\s*(de\s*)?(sal[aá]rio|vencimento|contrato)|sal[aá]rio\s*(do\s*m[eê]s|rescis)/i;
-const RSC_AVISO_INDENIZ_RE = /aviso\s*pr[eé]vio(?!\s*trab)(\s*(indeniz\w*|a\s*pagar|n[aã]o\s*cumprido))?/i;
-const RSC_AVISO_TRAB_RE    = /aviso\s*pr[eé]vio\s*(trabalhado|cumprido)/i;
-const RSC_D13_RE       = /13[°º]?\s*(sal[aá]rio\s*)?proporcional|d[eé]cimo\s*terceiro\s*prop/i;
-const RSC_FERIAS_PROP_RE   = /f[eé]rias\s*(proporcional|indenizad)/i;
-const RSC_FERIAS_VENC_RE   = /f[eé]rias\s*(vencidas?|do\s*per[ií]odo(?!\s*aquisit))/i;
-const RSC_FERIAS_DOBRO_RE  = /f[eé]rias\s*em\s*dobro/i;
-const RSC_ADIC_FERIAS_RE   = /adicional\s*(de\s*)?f[eé]rias|1\/3\s*(const\w*)?|ter[çc]o\s*(const\w*|f[eé]r)/i;
-const RSC_MULTA_RE     = /multa.*fgts|fgts.*multa|multa\s*(de\s*)?(40|20)\s*%?|indeniza[çc][aã]o\s*(rescis|fgts)|\bmulta\s*rescis/i;
+const RSC_SALDO_RE         = /saldo\s*(de\s*)?(salario|vencimento|contrato)|salario\s*(do\s*mes|rescis)/i;
+const RSC_AVISO_INDENIZ_RE = /aviso\s*previo(?!\s*trab)(\s*(indeniz\w*|a\s*pagar|nao\s*cumprido))?/i;
+const RSC_AVISO_TRAB_RE    = /aviso\s*previo\s*(trabalhado|cumprido)/i;
+// 13º: pega proporcional + adicionais + 1/12 indenizado + 1/12 ind. adicionais
+const RSC_D13_RE           = /13[°º]?\s*salario|decimo\s*terceiro/i;
+// Férias prop + seus reflexos (proporcional, adicionais, indenizadas, ind. adicionais)
+const RSC_FERIAS_PROP_RE   = /ferias\s*(proporciona|indenizad|ind\.?\s*adic|adic)/i;
+const RSC_FERIAS_VENC_RE   = /ferias\s*(vencidas?|do\s*periodo(?!\s*aquisit))/i;
+const RSC_FERIAS_DOBRO_RE  = /ferias\s*em\s*dobro/i;
+// 1/3 / Terço constitucional — testar ANTES de RSC_FERIAS_PROP_RE no loop
+const RSC_TERCO_RE         = /1\s*\/\s*3\s*ferias|terco\s*(const|fer)/i;
+const RSC_MULTA_RE         = /multa.*fgts|fgts.*multa|multa\s*(de\s*)?(40|20)\s*%?|indenizacao\s*(rescis|fgts)|\bmulta\s*rescis/i;
+// Parcelas decorrentes do aviso prévio indenizado — isentas de INSS e IRRF (Tema 478 STJ, RE 593.068)
+const RSC_INDENIZADO_RE    = /indeniz|\bind\.?\s*adic/i;
 
 // ── Rescisão: verbas identificadas ───────────────────────────────────────────
 
@@ -666,9 +693,11 @@ interface VerbasRescisao {
   avisoTrabLine: HoleriteLine | null;
   avisoLine: HoleriteLine | null;
   avisoIndenizado: boolean;
-  decimo13Line: HoleriteLine | null;
-  feriasPropLine: HoleriteLine | null;
-  adicFeriasLine: HoleriteLine | null;
+  // Arrays — somam todas as decomposições
+  decimo13Lines: HoleriteLine[];
+  feriasPropLines: HoleriteLine[];
+  tercoFeriasLines: HoleriteLine[];
+  // Mantém individuais (não decompõem)
   feriasVencLine: HoleriteLine | null;
   feriasVencAdicLine: HoleriteLine | null;
   feriasDobro: HoleriteLine | null;
@@ -685,13 +714,14 @@ function identificarVerbasRescisao(parsed: ParsedHolerite): VerbasRescisao {
   let saldoSalLine: HoleriteLine | null = null;
   let avisoIndenizLine: HoleriteLine | null = null;
   let avisoTrabLine: HoleriteLine | null = null;
-  let decimo13Line: HoleriteLine | null = null;
-  let feriasPropLine: HoleriteLine | null = null;
-  let adicFeriasLine: HoleriteLine | null = null;
   let feriasVencLine: HoleriteLine | null = null;
   let feriasVencAdicLine: HoleriteLine | null = null;
   let feriasDobro: HoleriteLine | null = null;
   let multaLine: HoleriteLine | null = null;
+
+  const decimo13Lines: HoleriteLine[] = [];
+  const feriasPropLines: HoleriteLine[] = [];
+  const tercoFeriasLines: HoleriteLine[] = [];
   const inssLines: HoleriteLine[] = [];
   const irrfLines: HoleriteLine[] = [];
   const fgtsLines: HoleriteLine[] = [];
@@ -699,6 +729,8 @@ function identificarVerbasRescisao(parsed: ParsedHolerite): VerbasRescisao {
 
   for (const line of parsed.lines) {
     const d = line.description;
+    const dN = semAcento(d);
+
     if (line.type === "inss" || (line.kind === "deduction" && /\binss\b|previd[eê]ncia\s*social/i.test(d))) {
       inssLines.push(line); continue;
     }
@@ -708,19 +740,21 @@ function identificarVerbasRescisao(parsed: ParsedHolerite): VerbasRescisao {
     if (line.type === "fgts" || (line.kind === "info" && /\bfgts\b/i.test(d))) {
       fgtsLines.push(line); continue;
     }
+
     if (line.kind === "credit") {
-      if      (!saldoSalLine     && RSC_SALDO_RE.test(d))            saldoSalLine     = line;
-      else if (!avisoTrabLine    && RSC_AVISO_TRAB_RE.test(d))       avisoTrabLine    = line;
-      else if (!avisoIndenizLine && RSC_AVISO_INDENIZ_RE.test(d))    avisoIndenizLine = line;
-      else if (!decimo13Line     && RSC_D13_RE.test(d))              decimo13Line     = line;
-      else if (!feriasDobro      && RSC_FERIAS_DOBRO_RE.test(d))     feriasDobro      = line;
-      else if (!feriasVencLine   && RSC_FERIAS_VENC_RE.test(d))      feriasVencLine   = line;
-      else if (!feriasPropLine   && RSC_FERIAS_PROP_RE.test(d))      feriasPropLine   = line;
-      else if (!adicFeriasLine   && RSC_ADIC_FERIAS_RE.test(d))      adicFeriasLine   = line;
-      else if (!multaLine        && RSC_MULTA_RE.test(d))             multaLine        = line;
+      // ORDEM IMPORTA — terço/1/3 antes de férias prop, multa antes de outros
+      if      (!saldoSalLine     && RSC_SALDO_RE.test(dN))            saldoSalLine     = line;
+      else if (!avisoTrabLine    && RSC_AVISO_TRAB_RE.test(dN))       avisoTrabLine    = line;
+      else if (!avisoIndenizLine && RSC_AVISO_INDENIZ_RE.test(dN))    avisoIndenizLine = line;
+      else if (!multaLine        && RSC_MULTA_RE.test(dN))            multaLine        = line;
+      else if (RSC_TERCO_RE.test(dN))                                  tercoFeriasLines.push(line);
+      else if (!feriasDobro      && RSC_FERIAS_DOBRO_RE.test(dN))     feriasDobro      = line;
+      else if (!feriasVencLine   && RSC_FERIAS_VENC_RE.test(dN))      feriasVencLine   = line;
+      else if (RSC_D13_RE.test(dN))                                    decimo13Lines.push(line);
+      else if (RSC_FERIAS_PROP_RE.test(dN))                            feriasPropLines.push(line);
       else outrasLinhas.push(line);
     } else if (line.kind === "deduction") {
-      if (!feriasVencAdicLine && RSC_ADIC_FERIAS_RE.test(d) && feriasVencLine) {
+      if (!feriasVencAdicLine && RSC_TERCO_RE.test(dN) && feriasVencLine) {
         feriasVencAdicLine = line;
       } else {
         outrasLinhas.push(line);
@@ -734,19 +768,22 @@ function identificarVerbasRescisao(parsed: ParsedHolerite): VerbasRescisao {
   const avisoIndenizado = !avisoTrabLine && !!avisoIndenizLine;
 
   // Estimativa bruta de remuneração — prioriza fontes não-circulares
+  const decimo13Total  = decimo13Lines.reduce((s, l) => s + l.declared_value, 0);
+  const feriasPropTotal = feriasPropLines.reduce((s, l) => s + l.declared_value, 0);
   let remuneracao = 0;
-  if (decimo13Line?.declared_value) {
-    remuneracao = round2(decimo13Line.declared_value * 2); // assume ~6 meses
-  } else if (feriasPropLine?.declared_value) {
-    remuneracao = round2(feriasPropLine.declared_value * 2); // assume ~6 meses
+  if (decimo13Total > 0) {
+    remuneracao = round2(decimo13Total * 2);
+  } else if (feriasPropTotal > 0) {
+    remuneracao = round2(feriasPropTotal * 2);
   } else if (avisoIndenizLine?.declared_value) {
-    remuneracao = avisoIndenizLine.declared_value; // assume 30 dias (mínimo)
+    remuneracao = avisoIndenizLine.declared_value;
   }
 
   return {
     saldoSalLine, avisoIndenizLine, avisoTrabLine, avisoLine, avisoIndenizado,
-    decimo13Line, feriasPropLine, adicFeriasLine, feriasVencLine, feriasVencAdicLine,
-    feriasDobro, multaLine, inssLines, irrfLines, fgtsLines, outrasLinhas, remuneracao,
+    decimo13Lines, feriasPropLines, tercoFeriasLines,
+    feriasVencLine, feriasVencAdicLine, feriasDobro, multaLine,
+    inssLines, irrfLines, fgtsLines, outrasLinhas, remuneracao,
   };
 }
 
@@ -756,19 +793,25 @@ export function inferirCenarioRescisao(parsed: ParsedHolerite): CenarioRescisao 
   const verbas = identificarVerbasRescisao(parsed);
 
   // 1. Inferir anos de serviço a partir do aviso indenizado
-  // aviso = remuneracao / 30 * (30 + anos*3)  →  anos = (aviso*30/remuneracao - 30) / 3
+  // aviso = remuneracao / 30 * diasAviso, diasAviso = 30 + max(0, anos-1) × 3
+  // Logo: diasAviso = aviso × 30 / remuneracao
+  // Se diasAviso ≤ 30: anos = 0 ou 1; se > 30: anos = ((diasAviso - 30) / 3) + 1
   let anosInferido: number | null = null;
   if (verbas.avisoIndenizLine && verbas.remuneracao > 0) {
-    const diasInferidos = Math.round(verbas.avisoIndenizLine.declared_value * 30 / verbas.remuneracao);
-    anosInferido = Math.max(0, Math.round((diasInferidos - 30) / 3));
+    const diasAvisoInferido = Math.round(verbas.avisoIndenizLine.declared_value * 30 / verbas.remuneracao);
+    if (diasAvisoInferido <= 30) {
+      anosInferido = 0;
+    } else {
+      anosInferido = Math.round((diasAvisoInferido - 30) / 3) + 1;
+    }
     if (anosInferido > 30) anosInferido = null; // implausível
   }
 
   // 2. Inferir tipo de rescisão a partir das verbas presentes
   const temAviso  = !!verbas.avisoIndenizLine || !!verbas.avisoTrabLine;
   const temMulta  = !!verbas.multaLine;
-  const temD13    = !!verbas.decimo13Line;
-  const temFeriasProp = !!verbas.feriasPropLine;
+  const temD13    = verbas.decimo13Lines.length > 0;
+  const temFeriasProp = verbas.feriasPropLines.length > 0;
 
   let tipoInferido: TipoRescisao | null = null;
   if      (temAviso && temMulta)              tipoInferido = "sem_justa_causa";
@@ -793,7 +836,8 @@ export function inferirCenarioRescisao(parsed: ParsedHolerite): CenarioRescisao 
   if (tipoInferido === "sem_justa_causa" && !temMulta && (anosInferido ?? 0) > 0) {
     anomalias.push("Demissão sem justa causa sem multa FGTS — verifique se a multa foi paga em separado.");
   }
-  if (anosInferido === 0 && temD13 && verbas.remuneracao > 0 && verbas.decimo13Line!.declared_value > verbas.remuneracao) {
+  const decimo13TotalInferido = verbas.decimo13Lines.reduce((s, l) => s + l.declared_value, 0);
+  if (anosInferido === 0 && temD13 && verbas.remuneracao > 0 && decimo13TotalInferido > verbas.remuneracao) {
     anomalias.push("13º proporcional muito alto para alguém com menos de 1 ano de serviço.");
   }
 
@@ -821,7 +865,16 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
 
   // ── Datas e tempo de serviço ────────────────────────────────────────────
   const dtAdmissao = parseDDMMAAAA(parsed.data_admissao);
-  const dtRescisao = parseDDMMAAAA(parsed.data_rescisao) ?? parseDtFromComp(comp);
+  // Se data_rescisao não veio do TRCT, infere o ÚLTIMO dia do mês de competência
+  // (não o dia atual ou primeiro dia, que subestimam dias trabalhados)
+  const dtRescisaoParsed = parseDDMMAAAA(parsed.data_rescisao);
+  let dtRescisao: Date | null = dtRescisaoParsed;
+  if (!dtRescisao) {
+    const dtComp = parseDtFromComp(comp);
+    if (dtComp) {
+      dtRescisao = new Date(dtComp.getFullYear(), dtComp.getMonth() + 1, 0); // último dia do mês
+    }
+  }
   const datasDisp  = dtAdmissao !== null && dtRescisao !== null;
 
   const anosTraData: number | null = datasDisp
@@ -851,11 +904,9 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
   console.log("[CENARIO USADO] usouInferencia:", usouInferencia);
   console.log("[CENARIO USADO] cenarioInferido:", JSON.stringify(cenarioInferido));
 
-  // Dias trabalhados no mês da rescisão (denominador = 30, limite legal)
-  const diasRescisao = dtRescisao ? Math.min(dtRescisao.getDate(), 30) : null;
-
   // ── Dias de aviso prévio esperado ───────────────────────────────────────
-  const avisoMaxDias = anosTrab !== null ? Math.min(30 + anosTrab * 3, 90) : null;
+  const avisoMaxDias = anosTrab !== null ? calcularDiasAvisoPrevio(anosTrab) : null;
+  console.log("[AVISO DEBUG] anosTrab:", anosTrab, "diasAvisoEsp:", avisoMaxDias);
   let diasAvisoEsp: number | null;
   if (tipoR === "justa_causa" || tipoR === "pedido_demissao") {
     diasAvisoEsp = 0;
@@ -876,10 +927,10 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
     const anoR = dtRescisao.getFullYear();
     const inicioCalc = dtAdmissao && dtAdmissao.getFullYear() === anoR
       ? dtAdmissao
-      : new Date(anoR, 0, 1); // 1º de janeiro
+      : new Date(anoR, 0, 1);
     const fimCalc = dtEfetiva.getFullYear() === anoR
       ? dtEfetiva
-      : new Date(anoR, 11, 31); // 31 de dezembro
+      : new Date(anoR, 11, 31);
     meses13Calc = Math.min(mesesComFracao15(inicioCalc, fimCalc), 12);
   }
 
@@ -890,38 +941,62 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
     mesesFeriasCalc = Math.min(mesesComFracao15(ultimoAniv, dtEfetiva), 11);
   }
 
+  console.log("[RESCISAO DEBUG] meses calculados → meses13Calc:", meses13Calc, "mesesFeriasCalc:", mesesFeriasCalc, "dtRescisao usada:", dtRescisao?.toISOString(), "dtEfetiva:", dtEfetiva?.toISOString());
+
   // ── Identificar verbas nas linhas declaradas ─────────────────────────────
   const {
     saldoSalLine, avisoIndenizLine, avisoTrabLine, avisoLine, avisoIndenizado,
-    decimo13Line, feriasPropLine, adicFeriasLine, feriasVencLine, feriasVencAdicLine,
-    feriasDobro, multaLine, inssLines, irrfLines, fgtsLines, outrasLinhas,
+    decimo13Lines, feriasPropLines, tercoFeriasLines,
+    feriasVencLine, feriasVencAdicLine, feriasDobro, multaLine,
+    inssLines, irrfLines, fgtsLines, outrasLinhas,
   } = identificarVerbasRescisao(parsed);
 
-  console.log("[RESCISAO DEBUG] === Reconhecimento de verbas ===");
-  console.log("[RESCISAO DEBUG] saldoSalLine:", saldoSalLine?.description, saldoSalLine?.declared_value);
-  console.log("[RESCISAO DEBUG] avisoIndenizLine:", avisoIndenizLine?.description, avisoIndenizLine?.declared_value);
-  console.log("[RESCISAO DEBUG] avisoTrabLine:", avisoTrabLine?.description, avisoTrabLine?.declared_value);
-  console.log("[RESCISAO DEBUG] decimo13Line:", decimo13Line?.description, decimo13Line?.declared_value);
-  console.log("[RESCISAO DEBUG] feriasPropLine:", feriasPropLine?.description, feriasPropLine?.declared_value);
-  console.log("[RESCISAO DEBUG] adicFeriasLine:", adicFeriasLine?.description, adicFeriasLine?.declared_value);
-  console.log("[RESCISAO DEBUG] feriasVencLine:", feriasVencLine?.description, feriasVencLine?.declared_value);
-  console.log("[RESCISAO DEBUG] multaLine:", multaLine?.description, multaLine?.declared_value);
-  console.log("[RESCISAO DEBUG] inssLines.length:", inssLines.length, "→", inssLines.map(l => `${l.description}=${l.declared_value}`));
-  console.log("[RESCISAO DEBUG] irrfLines.length:", irrfLines.length, "→", irrfLines.map(l => `${l.description}=${l.declared_value}`));
-  console.log("[RESCISAO DEBUG] fgtsLines.length:", fgtsLines.length, "→", fgtsLines.map(l => `${l.description}=${l.declared_value}`));
-  console.log("[RESCISAO DEBUG] outrasLinhas:", outrasLinhas.map(l => `${l.description}=${l.declared_value}`));
+  // Dias trabalhados no mês: prefere basis declarado pela IA (vem do TRCT como 30,00)
+  // sobre data inferida (dtRescisao.getDate()), porque dtRescisao costuma ser inferida quando ausente
+  const diasRescisao: number | null = saldoSalLine?.basis ?? (dtRescisao ? Math.min(dtRescisao.getDate(), 30) : null);
+
+  // Somas declaradas (totais decompostos)
+  const decimo13DeclaradoTotal  = decimo13Lines.reduce((s, l) => s + l.declared_value, 0);
+  const feriasPropDeclaradoTotal = feriasPropLines.reduce((s, l) => s + l.declared_value, 0);
+  const tercoDeclaradoTotal     = tercoFeriasLines.reduce((s, l) => s + l.declared_value, 0);
+
+  console.log("[RESCISAO DEBUG] === Decomposições ===");
+  console.log("[RESCISAO DEBUG] decimo13Lines.length:", decimo13Lines.length, "→ total:", decimo13DeclaradoTotal);
+  console.log("[RESCISAO DEBUG] feriasPropLines.length:", feriasPropLines.length, "→ total:", feriasPropDeclaradoTotal);
+  console.log("[RESCISAO DEBUG] tercoFeriasLines.length:", tercoFeriasLines.length, "→ total:", tercoDeclaradoTotal);
+
+  // Separar parcelas tributáveis das indenizadas (Tema 478 STJ + Súmula 386 STJ)
+  const decimo13Tributavel = decimo13Lines
+    .filter(l => !RSC_INDENIZADO_RE.test(semAcento(l.description)))
+    .reduce((s, l) => s + l.declared_value, 0);
+  const decimo13Indenizado = decimo13Lines
+    .filter(l => RSC_INDENIZADO_RE.test(semAcento(l.description)))
+    .reduce((s, l) => s + l.declared_value, 0);
+  const feriasIndenizadasDeclaradas = feriasPropLines
+    .filter(l => RSC_INDENIZADO_RE.test(semAcento(l.description)))
+    .reduce((s, l) => s + l.declared_value, 0);
+  const tercoIndenizadoDeclarado = tercoFeriasLines
+    .filter(l => RSC_INDENIZADO_RE.test(semAcento(l.description)))
+    .reduce((s, l) => s + l.declared_value, 0);
+  console.log("[RESCISAO DEBUG] === Tributação ===");
+  console.log("[RESCISAO DEBUG] 13º tributável:", decimo13Tributavel, "indenizado:", decimo13Indenizado);
+  console.log("[RESCISAO DEBUG] Férias indenizadas:", feriasIndenizadasDeclaradas, "1/3 indenizado:", tercoIndenizadoDeclarado);
 
   // ── Inferir remuneração mensal ───────────────────────────────────────────
   let remuneracao: number | null = null;
-  // Prioridade: aviso (mais confiável) → saldo → 13º → férias
-  if (avisoLine?.declared_value && diasAvisoEsp && diasAvisoEsp > 0) {
+  if (saldoSalLine?.declared_value && (saldoSalLine.basis ?? 30) >= 28) {
+    const dias = saldoSalLine.basis ?? 30;
+    remuneracao = round2(saldoSalLine.declared_value / dias * 30);
+  } else if (saldoSalLine?.declared_value && diasRescisao && diasRescisao >= 28) {
+    remuneracao = round2(saldoSalLine.declared_value / diasRescisao * 30);
+  } else if (avisoLine?.declared_value && diasAvisoEsp && diasAvisoEsp > 0) {
     remuneracao = round2(avisoLine.declared_value / diasAvisoEsp * 30);
   } else if (saldoSalLine?.declared_value && diasRescisao) {
     remuneracao = round2(saldoSalLine.declared_value / diasRescisao * 30);
-  } else if (decimo13Line?.declared_value && meses13Calc && meses13Calc > 0) {
-    remuneracao = round2(decimo13Line.declared_value / meses13Calc * 12);
-  } else if (feriasPropLine?.declared_value && mesesFeriasCalc && mesesFeriasCalc > 0) {
-    remuneracao = round2(feriasPropLine.declared_value / mesesFeriasCalc * 12);
+  } else if (decimo13DeclaradoTotal > 0 && meses13Calc && meses13Calc > 0) {
+    remuneracao = round2(decimo13DeclaradoTotal / meses13Calc * 12);
+  } else if (feriasPropDeclaradoTotal > 0 && mesesFeriasCalc && mesesFeriasCalc > 0) {
+    remuneracao = round2(feriasPropDeclaradoTotal / mesesFeriasCalc * 12);
   }
 
   // ── Valores esperados ─────────────────────────────────────────────────────
@@ -938,30 +1013,41 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
   const feriasPropEsp = tipoR !== "justa_causa" && remuneracao !== null && mesesFeriasCalc !== null
     ? round2(remuneracao / 12 * mesesFeriasCalc) : null;
 
-  const adicFeriasEsp = feriasPropEsp !== null ? round2(feriasPropEsp / 3) : null;
+  // ── INSS ────────────────────────────────────────────────────────────────
+  // INCIDE: saldo de salário, 13º proporcional dos meses TRABALHADOS
+  // NÃO incide: aviso indenizado, 13º indenizado, férias indenizadas
+  //   (Tema 478 STJ, RE 593.068 STF, Decreto 3.048/99 Art. 28 §9º)
+  const baseSaldoParaInss = saldoSalLine?.declared_value ?? saldoEsp ?? 0;
+  // 13º para INSS: usa tributável declarado se disponível, senão esperado descontando indenizado
+  const baseD13ParaInss = decimo13Tributavel > 0
+    ? decimo13Tributavel
+    : (decimo13Esp !== null ? round2(decimo13Esp - decimo13Indenizado) : 0);
+  const inssEspSaldo = calcularINSS(baseSaldoParaInss, comp);
+  const inssEspD13   = calcularINSS(baseD13ParaInss, comp);
+  const inssEspTotal = round2(inssEspSaldo + inssEspD13);
 
-  // ── INSS e IRRF (CLT Art. 477 + Decreto 3.048/99) ───────────────────────
-  // INSS: incide sobre saldo de salário. Aviso prévio INDENIZADO = isento.
-  // 13º proporcional: INSS calculado SEPARADAMENTE sobre o valor do 13º.
-  const baseSaldoParaInss = saldoEsp ?? saldoSalLine?.declared_value ?? 0;
-  const baseD13ParaInss   = decimo13Esp ?? decimo13Line?.declared_value ?? 0;
-  const inssEspSaldo  = calcularINSS(baseSaldoParaInss, comp);
-  const inssEspD13    = calcularINSS(baseD13ParaInss, comp);
-  const inssEspTotal  = round2(inssEspSaldo + inssEspD13);
-
-  // IRRF: sobre saldo − INSS − dependentes. Aviso indenizado = isento. 13º = separado.
+  // ── IRRF ────────────────────────────────────────────────────────────────
+  // INCIDE: saldo, 13º tributável
+  // NÃO incide: aviso indenizado, férias indenizadas + 1/3, 13º indenizado
+  //   (Súmula 215 STJ, Súmula 386 STJ, IN RFB 1500/2014 Art. 7º)
   const irrfEspSaldo = calcularIRRF(baseSaldoParaInss, inssEspSaldo, dependentes, comp);
   const irrfEspD13   = calcularIRRF(baseD13ParaInss, inssEspD13, 0, comp);
   const irrfEspTotal = round2(irrfEspSaldo + irrfEspD13);
 
-  // ── FGTS do mês (Lei 8.036/90 Art. 15 + Súmula 305 TST) ─────────────────
-  // Base: saldo + 13º prop. + aviso indenizado (FGTS incide mesmo com INSS isento)
-  const baseFgtsCalc = round2(
-    baseSaldoParaInss +
-    baseD13ParaInss +
-    (avisoIndenizado ? (avisoEsp ?? avisoIndenizLine?.declared_value ?? 0) : 0)
-  );
-  const fgtsEspTotal = round2(baseFgtsCalc * 0.08);
+  // ── FGTS do mês (Lei 8.036/90 Art. 15) ──────────────────────────────────
+  // FGTS incide sobre TODA a remuneração rescisória, inclusive verbas indenizadas:
+  //   - Saldo de salário (Súmula 305 TST)
+  //   - 13º proporcional INTEIRO (tributável + indenizado) — Súmula 63 TST
+  //   - Aviso prévio indenizado — Súmula 305 TST
+  //   - Férias indenizadas: NÃO sofrem FGTS (não são remuneração de competência)
+  const baseFgtsSaldo = baseSaldoParaInss;
+  const baseFgtsD13   = decimo13Esp ?? 0;   // 13º INTEIRO (não só tributável)
+  const baseFgtsAviso = avisoIndenizado ? (avisoEsp ?? avisoIndenizLine?.declared_value ?? 0) : 0;
+  const baseFgtsCalc  = round2(baseFgtsSaldo + baseFgtsD13 + baseFgtsAviso);
+  const fgtsEspTotal  = round2(baseFgtsCalc * 0.08);
+  console.log("[RESCISAO DEBUG] === FGTS detalhado ===");
+  console.log("[RESCISAO DEBUG] baseFgtsSaldo:", baseFgtsSaldo, "baseFgtsD13:", baseFgtsD13, "baseFgtsAviso:", baseFgtsAviso);
+  console.log("[RESCISAO DEBUG] baseFgtsCalc:", baseFgtsCalc, "fgtsEspTotal:", fgtsEspTotal);
 
   console.log("[RESCISAO DEBUG] === Datas e tempo ===");
   console.log("[RESCISAO DEBUG] dtAdmissao:", parsed.data_admissao, "→", dtAdmissao);
@@ -1037,11 +1123,11 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
         avisoLine,
         null,
         "Lei 12.506/2011 Art. 1º",
-        `Aviso prévio: 30 dias + 3 dias/ano de serviço, máximo 90 dias. ${anosTrab === null ? "Tempo de serviço não disponível — informe a data de admissão." : `Com ${anosTrab} ano(s) de serviço: ${avisoMaxDias} dias.`} ${remuneracao === null ? "Remuneração mensal não identificada." : `Esperado: ${fmt(round2((remuneracao ?? 0) / 30 * (avisoMaxDias ?? 30)))}.`}`
+        `Aviso prévio (Lei 12.506/2011 + Tabela MTE 184/2012): 30 dias base + 3 dias por ano completo a partir do 2º ano de serviço. Máximo: 90 dias (atingido em 21 anos). ${anosTrab === null ? "Tempo de serviço não disponível — informe a data de admissão." : `Com ${anosTrab} ano(s) de serviço: ${avisoMaxDias} dias.`} ${remuneracao === null ? "Remuneração mensal não identificada." : `Esperado: ${fmt(round2((remuneracao ?? 0) / 30 * (avisoMaxDias ?? 30)))}.`}`
       );
     } else {
       const noteBase = avisoEsp !== null && anosTrab !== null
-        ? `Aviso prévio: ${diasAvisoEsp} dias (30 + ${anosTrab} ano(s) × 3${tipoR === "acordo_mutuo" ? " × 50% acordo mútuo" : ""})${remuneracao ? ` × ${fmt(remuneracao)}/30 = ${fmt(avisoEsp)}` : ""}.`
+        ? `Aviso prévio: ${diasAvisoEsp} dias (${anosTrab >= 1 ? `30 + ${anosTrab - 1} × 3` : "30"}${tipoR === "acordo_mutuo" ? ", reduzido em 50% por acordo mútuo" : ""}) × ${fmt(remuneracao ?? 0)}/30 = ${fmt(avisoEsp)}.`
         : null;
       pushAuditLine(avisoLine, avisoEsp, "Lei 12.506/2011 Art. 1º", avisoEsp === null ? `Aviso prévio não calculável — informe a data de admissão.` : undefined);
       if (avisoEsp !== null && !diverge(avisoLine.declared_value, avisoEsp) && noteBase) {
@@ -1051,41 +1137,122 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
     }
   }
 
-  // 3. 13º proporcional
-  if (decimo13Line) {
-    pushAuditLine(
-      decimo13Line,
-      decimo13Esp,
-      "Lei 4.090/62 + Súmula 157 TST",
-      decimo13Esp === null
+  // 3. 13º proporcional — soma todas as decomposições
+  if (decimo13Lines.length > 0) {
+    const line0 = decimo13Lines[0];
+    const diff = decimo13Esp !== null ? round2(decimo13DeclaradoTotal - decimo13Esp) : 0;
+    const hasDivergence = decimo13Esp !== null && Math.abs(diff) > TOLERANCE;
+    auditLines.push({
+      description: decimo13Lines.length > 1 ? "13º Salário Proporcional (total)" : line0.description,
+      type: line0.type,
+      kind: "credit",
+      declared_value: decimo13DeclaradoTotal,
+      expected_value: decimo13Esp ?? decimo13DeclaradoTotal,
+      difference: diff,
+      status: decimo13Esp === null ? "manual_check" : (hasDivergence ? "error" : "ok"),
+      note: decimo13Esp === null
         ? `13º proporcional = remuneração / 12 × meses. ${meses13Calc === null ? "Datas não disponíveis." : `Meses no ano: ${meses13Calc}.`} ${remuneracao === null ? "Remuneração não identificada." : ""}`
-        : undefined
-    );
+        : decimo13Lines.length > 1
+          ? `Soma das ${decimo13Lines.length} linhas de 13º: ${fmt(decimo13DeclaradoTotal)}. Esperado: ${fmt(decimo13Esp)} (${meses13Calc} meses × remuneração / 12).${hasDivergence ? ` Diferença: ${fmt(diff)}.` : ""}`
+          : `13º proporcional: ${meses13Calc} meses × ${fmt(remuneracao ?? 0)} / 12 = ${fmt(decimo13Esp)}.`,
+      legal_citation: hasDivergence ? "Lei 4.090/62 + Súmula 157 TST" : null,
+      scenarios: null,
+      tip: null,
+    });
+    for (let i = 1; i < decimo13Lines.length; i++) {
+      auditLines.push({
+        description: decimo13Lines[i].description + " (incluído no total acima)",
+        type: decimo13Lines[i].type,
+        kind: "credit",
+        declared_value: decimo13Lines[i].declared_value,
+        expected_value: decimo13Lines[i].declared_value,
+        difference: 0,
+        status: "ok",
+        note: null,
+        legal_citation: null,
+        scenarios: null,
+        tip: null,
+      });
+    }
   }
 
-  // 4. Férias proporcionais
-  if (feriasPropLine) {
-    pushAuditLine(
-      feriasPropLine,
-      feriasPropEsp,
-      "CLT Art. 147 + Súmula 261 TST",
-      feriasPropEsp === null
+  // 4. Férias proporcionais — soma todas as decomposições
+  if (feriasPropLines.length > 0) {
+    const line0 = feriasPropLines[0];
+    const diff = feriasPropEsp !== null ? round2(feriasPropDeclaradoTotal - feriasPropEsp) : 0;
+    const hasDivergence = feriasPropEsp !== null && Math.abs(diff) > TOLERANCE;
+    auditLines.push({
+      description: feriasPropLines.length > 1 ? "Férias Proporcionais (total)" : line0.description,
+      type: line0.type,
+      kind: "credit",
+      declared_value: feriasPropDeclaradoTotal,
+      expected_value: feriasPropEsp ?? feriasPropDeclaradoTotal,
+      difference: diff,
+      status: feriasPropEsp === null ? "manual_check" : (hasDivergence ? "error" : "ok"),
+      note: feriasPropEsp === null
         ? `Férias proporcionais = remuneração / 12 × meses desde último aniversário. ${mesesFeriasCalc === null ? "Datas não disponíveis." : `Meses: ${mesesFeriasCalc}.`} ${remuneracao === null ? "Remuneração não identificada." : ""}`
-        : undefined
-    );
+        : feriasPropLines.length > 1
+          ? `Soma das ${feriasPropLines.length} linhas de férias: ${fmt(feriasPropDeclaradoTotal)}. Esperado: ${fmt(feriasPropEsp)} (${mesesFeriasCalc} meses × remuneração / 12).${hasDivergence ? ` Diferença: ${fmt(diff)}.` : ""}`
+          : `Férias proporcionais: ${mesesFeriasCalc} meses × ${fmt(remuneracao ?? 0)} / 12 = ${fmt(feriasPropEsp)}.`,
+      legal_citation: hasDivergence ? "CLT Art. 146 parágrafo único + Súmula 261 TST" : null,
+      scenarios: null,
+      tip: null,
+    });
+    for (let i = 1; i < feriasPropLines.length; i++) {
+      auditLines.push({
+        description: feriasPropLines[i].description + " (incluído no total acima)",
+        type: feriasPropLines[i].type,
+        kind: "credit",
+        declared_value: feriasPropLines[i].declared_value,
+        expected_value: feriasPropLines[i].declared_value,
+        difference: 0,
+        status: "ok",
+        note: null,
+        legal_citation: null,
+        scenarios: null,
+        tip: null,
+      });
+    }
   }
 
-  // 5. Adicional de férias (1/3 constitucional)
-  if (adicFeriasLine) {
-    // Pode ser 1/3 sobre férias proporcionais OU vencidas
-    const baseParaAdic = feriasPropEsp ?? feriasPropLine?.declared_value;
-    const adicEsp = adicFeriasEsp ?? (baseParaAdic !== undefined ? round2(baseParaAdic / 3) : null);
-    pushAuditLine(
-      adicFeriasLine,
-      adicEsp,
-      "CF Art. 7º XVII",
-      adicEsp === null ? "1/3 constitucional = férias / 3. Não foi possível calcular as férias base." : undefined
-    );
+  // 5. 1/3 constitucional — soma todas as decomposições
+  if (tercoFeriasLines.length > 0) {
+    const line0 = tercoFeriasLines[0];
+    const tercoEsp = feriasPropEsp !== null ? round2(feriasPropEsp / 3) : null;
+    const diff = tercoEsp !== null ? round2(tercoDeclaradoTotal - tercoEsp) : 0;
+    const hasDivergence = tercoEsp !== null && Math.abs(diff) > TOLERANCE;
+    auditLines.push({
+      description: tercoFeriasLines.length > 1 ? "1/3 Férias (total)" : line0.description,
+      type: line0.type,
+      kind: "credit",
+      declared_value: tercoDeclaradoTotal,
+      expected_value: tercoEsp ?? tercoDeclaradoTotal,
+      difference: diff,
+      status: tercoEsp === null ? "manual_check" : (hasDivergence ? "error" : "ok"),
+      note: tercoEsp === null
+        ? "1/3 constitucional = férias / 3. Não foi possível calcular as férias base."
+        : tercoFeriasLines.length > 1
+          ? `Soma das ${tercoFeriasLines.length} linhas de 1/3: ${fmt(tercoDeclaradoTotal)}. Esperado: ${fmt(tercoEsp)} (1/3 sobre ${fmt(feriasPropEsp!)}).${hasDivergence ? ` Diferença: ${fmt(diff)}.` : ""}`
+          : `1/3 constitucional: ${fmt(feriasPropEsp!)} / 3 = ${fmt(tercoEsp)}.`,
+      legal_citation: hasDivergence ? "CF Art. 7º XVII" : null,
+      scenarios: null,
+      tip: null,
+    });
+    for (let i = 1; i < tercoFeriasLines.length; i++) {
+      auditLines.push({
+        description: tercoFeriasLines[i].description + " (incluído no total acima)",
+        type: tercoFeriasLines[i].type,
+        kind: "credit",
+        declared_value: tercoFeriasLines[i].declared_value,
+        expected_value: tercoFeriasLines[i].declared_value,
+        difference: 0,
+        status: "ok",
+        note: null,
+        legal_citation: null,
+        scenarios: null,
+        tip: null,
+      });
+    }
   }
 
   // 6. Férias vencidas (aceitar valor declarado — motor não tem os períodos aquisitivos)
@@ -1128,23 +1295,44 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
   if (multaLine) {
     const pctMulta = tipoR === "acordo_mutuo" ? 20 : 40;
     const saldoAcum = parsed.saldo_fgts_acumulado;
-    const multaEsp = saldoAcum !== null && saldoAcum !== undefined
-      ? round2(saldoAcum * pctMulta / 100) : null;
-    auditLines.push({
-      description: multaLine.description,
-      type: multaLine.type,
-      kind: "credit",
-      declared_value: multaLine.declared_value,
-      expected_value: multaEsp ?? multaLine.declared_value,
-      difference: multaEsp !== null ? round2(multaLine.declared_value - multaEsp) : 0,
-      status: multaEsp !== null && diverge(multaLine.declared_value, multaEsp) ? "error" : "manual_check",
-      note: multaEsp !== null
-        ? `Multa ${pctMulta}% FGTS = ${pctMulta}% × saldo total acumulado de ${fmt(saldoAcum!)} = ${fmt(multaEsp)}.`
-        : `Multa ${pctMulta}% incide sobre o saldo TOTAL acumulado do FGTS na conta do trabalhador. Consulte o extrato FGTS no aplicativo FGTS (Caixa Econômica Federal) e verifique se o valor de ${fmt(multaLine.declared_value)} corresponde a ${pctMulta}% do seu saldo.`,
-      legal_citation: tipoR === "acordo_mutuo" ? "CLT Art. 484-A §1º II" : "Lei 8.036/90 Art. 18 §1º",
-      scenarios: null,
-      tip: "Para verificar o saldo FGTS: baixe o app 'FGTS' da Caixa Econômica Federal ou acesse o portal FGTS.caixa.gov.br.",
-    });
+    const fonte = parsed.saldo_fgts_acumulado_fonte ?? "indisponivel";
+
+    // Multa só pode ser auditada se temos confirmação explícita do saldo TOTAL acumulado.
+    // O campo "FGTS" do rodapé do holerite é a BASE do mês (≠ saldo acumulado na conta).
+    const podeAuditar = saldoAcum != null && fonte === "usuario_confirmou";
+
+    if (podeAuditar) {
+      const multaEsp = round2(saldoAcum! * pctMulta / 100);
+      const diff = round2(multaLine.declared_value - multaEsp);
+      const hasDivergence = Math.abs(diff) > TOLERANCE;
+      auditLines.push({
+        description: multaLine.description,
+        type: multaLine.type,
+        kind: "credit",
+        declared_value: multaLine.declared_value,
+        expected_value: multaEsp,
+        difference: diff,
+        status: hasDivergence ? "error" : "ok",
+        note: `Multa ${pctMulta}% FGTS = ${pctMulta}% × saldo total acumulado de ${fmt(saldoAcum!)} = ${fmt(multaEsp)}.${hasDivergence ? ` Declarado: ${fmt(multaLine.declared_value)}. Diferença: ${fmt(diff)}.` : ""}`,
+        legal_citation: hasDivergence ? (tipoR === "acordo_mutuo" ? "CLT Art. 484-A §1º II" : "Lei 8.036/90 Art. 18 §1º") : null,
+        scenarios: null,
+        tip: null,
+      });
+    } else {
+      auditLines.push({
+        description: multaLine.description,
+        type: multaLine.type,
+        kind: "credit",
+        declared_value: multaLine.declared_value,
+        expected_value: multaLine.declared_value,
+        difference: 0,
+        status: "manual_check",
+        note: `Multa ${pctMulta}% sobre o saldo TOTAL acumulado do FGTS na conta vinculada (Lei 8.036/90 Art. 18 §1º). O valor pago foi ${fmt(multaLine.declared_value)} — para verificar se está correto, é preciso saber o saldo total da conta. Esse saldo NÃO aparece no holerite (o campo "FGTS" do rodapé é a base de cálculo do mês, não o acumulado).`,
+        legal_citation: null,
+        scenarios: null,
+        tip: "Para verificar o saldo total: baixe o app 'FGTS' da Caixa Econômica Federal ou acesse fgts.caixa.gov.br. O saldo deve refletir os depósitos mensais de 8% sobre todas as remunerações desde a admissão, mais juros e correção monetária.",
+      });
+    }
   } else if (tipoR === "sem_justa_causa" || tipoR === "acordo_mutuo") {
     // Multa esperada mas não declarada
     const pctMulta = tipoR === "acordo_mutuo" ? 20 : 40;
@@ -1177,7 +1365,7 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
       expected_value: inssEspTotal,
       difference: diff,
       status: hasDivergence ? "error" : "ok",
-      note: `Base INSS: saldo de salário ${fmt(baseSaldoParaInss)} → INSS ${fmt(inssEspSaldo)}; 13º proporcional ${fmt(baseD13ParaInss)} → INSS ${fmt(inssEspD13)}. Total esperado: ${fmt(inssEspTotal)}.${hasDivergence ? ` Declarado: ${fmt(inssDecl)}.` : ""}`,
+      note: `Base INSS: saldo ${fmt(baseSaldoParaInss)} → ${fmt(inssEspSaldo)}; 13º TRIBUTÁVEL ${fmt(baseD13ParaInss)} → ${fmt(inssEspD13)}. Total esperado: ${fmt(inssEspTotal)}.${decimo13Indenizado > 0 ? ` (13º indenizado ${fmt(decimo13Indenizado)} excluído da base — Tema 478 STJ).` : ""}${hasDivergence ? ` Declarado: ${fmt(inssDecl)}.` : ""}`,
       legal_citation: hasDivergence ? "Lei 8.212/91 Art. 28" : null,
       scenarios: null,
       tip: null,
@@ -1207,7 +1395,7 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
       expected_value: irrfEspTotal,
       difference: diff,
       status: hasDivergence ? "error" : "ok",
-      note: `IRRF sobre saldo: base ${fmt(baseSaldoParaInss)} − INSS ${fmt(inssEspSaldo)}${dependentes > 0 ? ` − ${dependentes} dep.` : ""} = ${fmt(round2(baseSaldoParaInss - inssEspSaldo - dependentes * 189.59))} → ${fmt(irrfEspSaldo)}. IRRF sobre 13º: base ${fmt(baseD13ParaInss)} − INSS ${fmt(inssEspD13)} → ${fmt(irrfEspD13)}. Total: ${fmt(irrfEspTotal)}.${hasDivergence ? ` Declarado: ${fmt(irrfDecl)}.` : ""}`,
+      note: `IRRF sobre saldo: base ${fmt(baseSaldoParaInss)} − INSS ${fmt(inssEspSaldo)}${dependentes > 0 ? ` − ${dependentes} dep.` : ""} → ${fmt(irrfEspSaldo)}. IRRF sobre 13º TRIBUTÁVEL: base ${fmt(baseD13ParaInss)} − INSS ${fmt(inssEspD13)} → ${fmt(irrfEspD13)}. Total: ${fmt(irrfEspTotal)}.${decimo13Indenizado + feriasIndenizadasDeclaradas + tercoIndenizadoDeclarado > 0 ? ` (Verbas indenizatórias ${fmt(decimo13Indenizado + feriasIndenizadasDeclaradas + tercoIndenizadoDeclarado)} excluídas — Súmula 215/386 STJ).` : ""}${hasDivergence ? ` Declarado: ${fmt(irrfDecl)}.` : ""}`,
       legal_citation: hasDivergence ? "Decreto 9.580/18 Art. 688" : null,
       scenarios: null,
       tip: null,
@@ -1222,11 +1410,32 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
     }
   }
 
+  // 9b. Verificar IRRF indevido sobre verbas indenizatórias
+  const totalIndenizatorias = (avisoIndenizado ? (avisoIndenizLine?.declared_value ?? 0) : 0)
+    + decimo13Indenizado
+    + feriasIndenizadasDeclaradas
+    + tercoIndenizadoDeclarado;
+  if (irrfDecl > 0 && totalIndenizatorias > 0 && irrfEspTotal === 0) {
+    auditLines.push({
+      description: "Possível IRRF indevido sobre verbas indenizatórias",
+      type: "irrf",
+      kind: "info",
+      declared_value: irrfDecl,
+      expected_value: 0,
+      difference: irrfDecl,
+      status: "warning" as LineStatus,
+      note: `Foi descontado IRRF de ${fmt(irrfDecl)} mas as verbas tributáveis (saldo + 13º trabalhado) não geram IRRF nesta faixa. As verbas indenizatórias (aviso, férias indenizadas, 13º indenizado) totalizam ${fmt(totalIndenizatorias)} e NÃO devem sofrer IRRF (Súmula 215 STJ, Súmula 386 STJ, IN RFB 1500/2014 Art. 7º). Verifique se o desconto foi aplicado sobre essas parcelas indevidamente.`,
+      legal_citation: "Súmula 215 STJ + Súmula 386 STJ",
+      scenarios: null,
+      tip: "Você pode pedir restituição via DIRPF anual (declaração de imposto de renda do ano seguinte), informando essas verbas como rendimentos isentos. Em casos de valores expressivos, vale ação trabalhista para devolução imediata.",
+    });
+  }
+
   // 10. FGTS do mês
   const fgtsDecl = fgtsLines.reduce((s, l) => s + l.declared_value, 0);
   if (fgtsLines.length > 0) {
     const diff = round2(fgtsDecl - fgtsEspTotal);
-    const hasDivergence = Math.abs(diff) > 1.00;
+    const hasDivergence = Math.abs(diff) > 2.00;
     auditLines.push({
       description: fgtsLines.length > 1 ? "FGTS (total)" : fgtsLines[0].description,
       type: "fgts",
@@ -1235,8 +1444,8 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
       expected_value: fgtsEspTotal,
       difference: diff,
       status: hasDivergence ? "warning" : "ok",
-      note: `Base FGTS: saldo ${fmt(baseSaldoParaInss)} + 13º ${fmt(baseD13ParaInss)}${avisoIndenizado && (avisoEsp ?? 0) > 0 ? ` + aviso indenizado ${fmt(avisoEsp ?? 0)}` : ""} = ${fmt(baseFgtsCalc)}. Esperado 8% = ${fmt(fgtsEspTotal)}.`,
-      legal_citation: hasDivergence ? "Lei 8.036/90 Art. 15 + Súmula 305 TST" : null,
+      note: `Base FGTS = saldo ${fmt(baseFgtsSaldo)} + 13º proporcional ${fmt(baseFgtsD13)}${baseFgtsAviso > 0 ? ` + aviso indenizado ${fmt(baseFgtsAviso)}` : ""} = ${fmt(baseFgtsCalc)}. FGTS esperado: ${fmt(baseFgtsCalc)} × 8% = ${fmt(fgtsEspTotal)}.${hasDivergence ? ` Declarado: ${fmt(fgtsDecl)}. Diferença: ${fmt(diff)}.` : ""} (FGTS incide sobre 13º inteiro — Súmula 63 TST — e sobre aviso indenizado — Súmula 305 TST.)`,
+      legal_citation: hasDivergence ? "Lei 8.036/90 Art. 15 + Súmulas 63 e 305 TST" : null,
       scenarios: null,
       tip: null,
     });

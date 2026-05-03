@@ -25,6 +25,11 @@ function inferirJornada(salarioBase: number, he: HoleriteAnalisado["horasExtras5
 }
 
 export function analisadoParaParsed(a: HoleriteAnalisado): ParsedHolerite {
+  // ── Branch dedicado para rescisão: usa schema verbasRescisao ──────────────
+  if (a.tipoHolerite === "rescisao" && a.verbasRescisao) {
+    return analisadoRescisaoParaParsed(a);
+  }
+
   const lines: HoleriteLine[] = [];
 
   function push(
@@ -198,5 +203,122 @@ export function analisadoParaParsed(a: HoleriteAnalisado): ParsedHolerite {
     tipo_rescisao: a.tipoRescisao ?? null,
     saldo_fgts_acumulado: a.saldoFGTSAcumulado ?? null,
     lines: finalLines,
+  };
+}
+
+/**
+ * Branch dedicado para rescisão.
+ * Gera linhas com `description` padronizada que o engine reconhece pelos regex
+ * RSC_* em lib/clt/engine.ts. Cada campo de verbasRescisao vira uma linha
+ * tipada — não passa por outrosProventos / outrosDescontos.
+ */
+function analisadoRescisaoParaParsed(a: HoleriteAnalisado): ParsedHolerite {
+  const v = a.verbasRescisao!;
+  const lines: HoleriteLine[] = [];
+
+  function add(
+    description: string,
+    type: HoleriteLineType,
+    kind: "credit" | "deduction" | "info",
+    value: number | null | undefined,
+    basis: number | null = null
+  ) {
+    if (value == null) return;
+    lines.push({ code: null, description, type, kind, declared_value: value, basis, rate: null });
+  }
+
+  // ── Saldo de salário (já inclui adicionais habituais somados pela IA) ────
+  add("Saldo de Salário", "salario_base", "credit",
+      v.saldo_salario?.valor, v.saldo_salario?.dias ?? null);
+
+  // ── Aviso prévio ──────────────────────────────────────────────────────────
+  add("Aviso Prévio Indenizado", "outros_creditos", "credit",
+      v.aviso_previo_indenizado?.valor, v.aviso_previo_indenizado?.dias ?? null);
+  add("Aviso Prévio Trabalhado", "outros_creditos", "credit",
+      v.aviso_previo_trabalhado?.valor, v.aviso_previo_trabalhado?.dias ?? null);
+
+  // ── 13º (engine acumula tudo que bate em RSC_D13_RE) ─────────────────────
+  add("13º Salário Proporcional", "decimo_terceiro", "credit",
+      v.decimo_terceiro_proporcional?.valor, v.decimo_terceiro_proporcional?.avos ?? null);
+  add("13º Salário Proporcional Adicionais", "decimo_terceiro", "credit",
+      v.decimo_terceiro_adicionais);
+  add("13º Salário Proporcional Indenizado (1/12)", "decimo_terceiro", "credit",
+      v.decimo_terceiro_indenizado);
+
+  // ── Férias proporcionais ──────────────────────────────────────────────────
+  add("Férias Proporcionais", "ferias", "credit",
+      v.ferias_proporcionais?.valor, v.ferias_proporcionais?.avos ?? null);
+  add("1/3 Férias Proporcionais", "adicional_ferias", "credit",
+      v.terco_ferias_proporcionais);
+
+  // ── Férias vencidas (período completo não gozado, dentro do concessivo) ──
+  add("Férias Vencidas", "ferias", "credit", v.ferias_vencidas);
+  add("1/3 Férias Vencidas", "adicional_ferias", "credit", v.terco_ferias_vencidas);
+
+  // ── Férias indenizadas (período completo aquisitivo após concessivo) ─────
+  add("Férias Indenizadas", "ferias", "credit", v.ferias_indenizadas);
+  add("1/3 Férias Indenizadas", "adicional_ferias", "credit", v.terco_ferias_indenizadas);
+
+  // ── Adicionais habituais sobre férias (insal proporcional, etc.) ─────────
+  add("Férias Adicionais", "outros_creditos", "credit", v.ferias_adicionais);
+
+  // ── Multa rescisória (40% FGTS sem justa causa, 20% acordo) ──────────────
+  add("Multa Rescisória 40% FGTS", "outros_creditos", "credit", v.multa_rescisoria);
+
+  // ── INSS — duas linhas separadas (engine soma para o total) ──────────────
+  add("INSS Rescisão", "inss", "deduction", v.inss_rescisao);
+  add("INSS 13º Salário", "inss", "deduction", v.inss_13);
+
+  // ── IRRF ──────────────────────────────────────────────────────────────────
+  add("IRRF", "irrf", "deduction", v.irrf);
+
+  // ── Outras verbas (pass-through preservando descrição original do TRCT) ──
+  (v.outras_verbas ?? []).forEach((o) => {
+    if (o.tipo === "credito") {
+      add(o.descricao, "outros_creditos", "credit", o.valor);
+    } else {
+      add(o.descricao, "outros_descontos", "deduction", o.valor);
+    }
+  });
+
+  // ── Adicionais habituais — informativos (já estão somados no saldo) ──────
+  // Marcamos como "info" para não duplicar no total de vencimentos.
+  (a.adicionais_habituais ?? []).forEach((adic) => {
+    lines.push({
+      code: null,
+      description: `${adic.descricao} (referência — já incluso no saldo)`,
+      type: "outros_creditos",
+      kind: "info",
+      declared_value: adic.valor,
+      basis: null,
+      rate: null,
+    });
+  });
+
+  // ── FGTS depósito do mês (informativo, não desconta do líquido) ──────────
+  add("FGTS", "fgts", "info", a.fgts?.deposito_mes ?? a.valorFGTS);
+
+  // ── Gross salary: prefere o total declarado pelo rodapé do TRCT ──────────
+  const grossSalary =
+    a.totais?.total_vencimentos ??
+    lines
+      .filter((l) => l.kind === "credit")
+      .reduce((s, l) => s + l.declared_value, 0);
+
+  return {
+    employee_name: "",
+    employer_name: a.empregador ?? "",
+    cpf: null,
+    cnpj: null,
+    competencia: a.mesReferencia ?? "",
+    gross_salary: grossSalary,
+    dependents: a.dependentes ?? null,
+    horas_mensais_contrato: a.jornadaMensal ?? undefined,
+    tipo_holerite_confirmado: "rescisao",
+    data_admissao: a.dataAdmissao ?? null,
+    data_rescisao: a.dataRescisao ?? null,
+    tipo_rescisao: a.tipoRescisao ?? null,
+    saldo_fgts_acumulado: a.fgts?.saldo_acumulado ?? a.saldoFGTSAcumulado ?? null,
+    lines,
   };
 }

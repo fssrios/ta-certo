@@ -33,3 +33,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Arquivos de debug e backups da sessão de fixes rescisão
+debug_rescisao.log
+*.bak
+funcao_extraida.txt
+logs_para_analise.txt
+regras_clt.txt
+regras_rescisao.txt
+rescisao_func.txt
+resposta_ia_completa.txt

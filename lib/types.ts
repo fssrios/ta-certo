@@ -66,6 +66,8 @@ export interface ParsedHolerite {
   tipo_rescisao?: TipoRescisao | null;
   /** Saldo total acumulado do FGTS — extraído do TRCT (para cálculo da multa) */
   saldo_fgts_acumulado?: number | null;
+  /** Origem do saldo FGTS: "usuario_confirmou" só se o usuário digitou explicitamente via UI */
+  saldo_fgts_acumulado_fonte?: "usuario_confirmou" | "pdf_rodape" | "indisponivel" | null;
   /** Anos completos de serviço — fallback quando data_admissao não está disponível */
   anos_servico_completos?: number | null;
   /** Modalidade do aviso prévio — informada pelo usuário */
@@ -211,6 +213,38 @@ export interface HoleriteAnalisado {
   dataRescisao?: string | null;
   tipoRescisao?: "sem_justa_causa" | "pedido_demissao" | "acordo_mutuo" | "justa_causa" | null;
   saldoFGTSAcumulado?: number | null;
+  /** Salário base contratual (somente em rescisão — diferente de salarioBase mensal) */
+  salarioBaseContratual?: number | null;
+  /** Adicionais habituais (insalubridade, periculosidade, etc.) que integram a remuneração */
+  adicionais_habituais?: Array<{ descricao: string; valor: number }> | null;
+  /** Verbas rescisórias estruturadas (somente em rescisão) */
+  verbasRescisao?: VerbasRescisaoAnalisadas | null;
+  /** Totais informativos do rodapé do TRCT */
+  totais?: { total_vencimentos: number | null; total_descontos: number | null; liquido: number | null } | null;
+  /** Informações de FGTS extraídas do TRCT */
+  fgts?: { deposito_mes: number | null; saldo_acumulado: number | null } | null;
+}
+
+/** Schema dedicado de verbas rescisórias retornado pela IA quando tipoHolerite === "rescisao" */
+export interface VerbasRescisaoAnalisadas {
+  saldo_salario: { valor: number; dias: number } | null;
+  aviso_previo_indenizado: { valor: number; dias: number | null } | null;
+  aviso_previo_trabalhado: { valor: number; dias: number | null } | null;
+  decimo_terceiro_proporcional: { valor: number; avos: number | null } | null;
+  decimo_terceiro_adicionais: number | null;
+  decimo_terceiro_indenizado: number | null;
+  ferias_proporcionais: { valor: number; avos: number | null } | null;
+  terco_ferias_proporcionais: number | null;
+  ferias_vencidas: number | null;
+  terco_ferias_vencidas: number | null;
+  ferias_indenizadas: number | null;
+  terco_ferias_indenizadas: number | null;
+  ferias_adicionais: number | null;
+  multa_rescisoria: number | null;
+  inss_rescisao: number | null;
+  inss_13: number | null;
+  irrf: number | null;
+  outras_verbas: Array<{ descricao: string; valor: number; tipo: "credito" | "desconto" }>;
 }
 
 // ── Tabela auditorias ─────────────────────────────────────────────────────────
