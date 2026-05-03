@@ -682,7 +682,9 @@ const RSC_FERIAS_DOBRO_RE  = /ferias\s*em\s*dobro/i;
 // 1/3 / Terço constitucional — testar ANTES de RSC_FERIAS_PROP_RE no loop
 const RSC_TERCO_RE         = /1\s*\/\s*3\s*ferias|terco\s*(const|fer)/i;
 const RSC_MULTA_RE         = /multa.*fgts|fgts.*multa|multa\s*(de\s*)?(40|20)\s*%?|indenizacao\s*(rescis|fgts)|\bmulta\s*rescis/i;
-// Parcelas decorrentes do aviso prévio indenizado — isentas de INSS e IRRF (Tema 478 STJ, RE 593.068)
+// Parcelas indenizatórias — isentas de INSS e IRRF (Tema 478 STJ para aviso prévio direto;
+// Súmula 215/386 STJ para férias indenizadas e 1/3). EXCEÇÃO: 13º proporcional referente ao
+// aviso indenizado SOFRE incidência de INSS (Tema 1170 STJ, 2024) — verba acessória ao 13º.
 const RSC_INDENIZADO_RE    = /indeniz|\bind\.?\s*adic/i;
 
 // ── Rescisão: verbas identificadas ───────────────────────────────────────────
@@ -1007,7 +1009,9 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
   console.log("[RESCISAO DEBUG] feriasPropLines.length:", feriasPropLines.length, "→ total:", feriasPropDeclaradoTotal);
   console.log("[RESCISAO DEBUG] tercoFeriasLines.length:", tercoFeriasLines.length, "→ total:", tercoDeclaradoTotal);
 
-  // Separar parcelas tributáveis das indenizadas (Tema 478 STJ + Súmula 386 STJ)
+  // Separar parcelas tributáveis das indenizadas — usado para férias indenizadas e 1/3.
+  // ATENÇÃO: para 13º proporcional, NÃO se aplica essa separação ao calcular INSS — Tema 1170 STJ
+  // determina incidência integral. A separação aqui é mantida apenas para fins de auditoria/relatório.
   const decimo13Tributavel = decimo13Lines
     .filter(l => !RSC_INDENIZADO_RE.test(semAcento(l.description)))
     .reduce((s, l) => s + l.declared_value, 0);
@@ -1056,14 +1060,27 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
     ? round2(remuneracao / 12 * mesesFeriasCalc) : null;
 
   // ── INSS ────────────────────────────────────────────────────────────────
-  // INCIDE: saldo de salário, 13º proporcional dos meses TRABALHADOS
-  // NÃO incide: aviso indenizado, 13º indenizado, férias indenizadas
-  //   (Tema 478 STJ, RE 593.068 STF, Decreto 3.048/99 Art. 28 §9º)
+  // ──────────────────────────────────────────────────────────────────────
+  // BASE DE INSS SOBRE 13º — Tema 1170 STJ (2024)
+  // ──────────────────────────────────────────────────────────────────────
+  // O 13º proporcional, mesmo a parte referente ao período do aviso prévio
+  // indenizado, INTEGRA a base de cálculo do INSS. Tese vinculante firmada
+  // pela 1ª Seção do STJ em 10/05/2024 sob a sistemática de recursos
+  // repetitivos (REsps 1.974.197/AM, 2.000.020/MG, 2.006.644/MG):
+  // "A contribuição previdenciária patronal incide sobre os valores pagos
+  // ao trabalhador a título de décimo terceiro salário proporcional
+  // relacionado ao período do aviso prévio indenizado."
+  //
+  // OBSERVAÇÃO: o aviso prévio indenizado em si (a parcela direta, não o
+  // reflexo no 13º) continua isento de INSS por força do Tema 478 STJ.
+  // O Tema 1170 trata especificamente do REFLEXO no 13º.
+  //
+  // Há ADPF 1445 STF com repercussão geral admitida (fev/2026), mas até o
+  // julgamento do mérito, o Tema 1170 STJ é a tese vinculante.
   const baseSaldoParaInss = saldoSalLine?.declared_value ?? saldoEsp ?? 0;
-  // 13º para INSS: usa tributável declarado se disponível, senão esperado descontando indenizado
-  const baseD13ParaInss = decimo13Tributavel > 0
-    ? decimo13Tributavel
-    : (decimo13Esp !== null ? round2(decimo13Esp - decimo13Indenizado) : 0);
+  const baseD13ParaInss = decimo13DeclaradoTotal > 0
+    ? decimo13DeclaradoTotal
+    : (decimo13Esp ?? 0);
   const inssEspSaldo = calcularINSS(baseSaldoParaInss, comp);
   const inssEspD13   = calcularINSS(baseD13ParaInss, comp);
   const inssEspTotal = round2(inssEspSaldo + inssEspD13);
@@ -1107,7 +1124,7 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
   console.log("[RESCISAO DEBUG] === Cálculos ===");
   console.log("[RESCISAO DEBUG] remuneracao inferida:", remuneracao);
   console.log("[RESCISAO DEBUG] saldoEsp:", saldoEsp, "avisoEsp:", avisoEsp, "decimo13Esp:", decimo13Esp, "feriasPropEsp:", feriasPropEsp);
-  console.log("[RESCISAO DEBUG] baseSaldoParaInss:", baseSaldoParaInss, "baseD13ParaInss:", baseD13ParaInss);
+  console.log("[RESCISAO DEBUG] baseSaldoParaInss:", baseSaldoParaInss, "baseD13ParaInss:", baseD13ParaInss, "(13º integral conforme Tema 1170 STJ)");
   console.log("[RESCISAO DEBUG] inssEspTotal:", inssEspTotal, "irrfEspTotal:", irrfEspTotal, "fgtsEspTotal:", fgtsEspTotal);
 
   // ── Construir linhas de auditoria ────────────────────────────────────────
@@ -1425,7 +1442,7 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
       expected_value: inssEspTotal,
       difference: diff,
       status: hasDivergence ? "error" : "ok",
-      note: `Base INSS: saldo ${fmt(baseSaldoParaInss)} → ${fmt(inssEspSaldo)}; 13º TRIBUTÁVEL ${fmt(baseD13ParaInss)} → ${fmt(inssEspD13)}. Total esperado: ${fmt(inssEspTotal)}.${decimo13Indenizado > 0 ? ` (13º indenizado ${fmt(decimo13Indenizado)} excluído da base — Tema 478 STJ).` : ""}${hasDivergence ? ` Declarado: ${fmt(inssDecl)}.` : ""}`,
+      note: `Base INSS: saldo ${fmt(baseSaldoParaInss)} → ${fmt(inssEspSaldo)}; 13º (integral) ${fmt(baseD13ParaInss)} → ${fmt(inssEspD13)}. Total esperado: ${fmt(inssEspTotal)}. (13º incide integralmente, mesmo o reflexo do aviso indenizado — Tema 1170 STJ. Aviso indenizado direto permanece isento — Tema 478 STJ.)${hasDivergence ? ` Declarado: ${fmt(inssDecl)}.` : ""}`,
       legal_citation: hasDivergence ? "Lei 8.212/91 Art. 28" : null,
       scenarios: null,
       tip: null,
@@ -1455,7 +1472,7 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
       expected_value: irrfEspTotal,
       difference: diff,
       status: hasDivergence ? "error" : "ok",
-      note: `IRRF sobre saldo: base ${fmt(baseSaldoParaInss)} − INSS ${fmt(inssEspSaldo)}${dependentes > 0 ? ` − ${dependentes} dep.` : ""} → ${fmt(irrfEspSaldo)}. IRRF sobre 13º TRIBUTÁVEL: base ${fmt(baseD13ParaInss)} − INSS ${fmt(inssEspD13)} → ${fmt(irrfEspD13)}. Total: ${fmt(irrfEspTotal)}.${decimo13Indenizado + feriasIndenizadasDeclaradas + tercoIndenizadoDeclarado > 0 ? ` (Verbas indenizatórias ${fmt(decimo13Indenizado + feriasIndenizadasDeclaradas + tercoIndenizadoDeclarado)} excluídas — Súmula 215/386 STJ).` : ""}${hasDivergence ? ` Declarado: ${fmt(irrfDecl)}.` : ""}`,
+      note: `IRRF sobre saldo: base ${fmt(baseSaldoParaInss)} − INSS ${fmt(inssEspSaldo)}${dependentes > 0 ? ` − ${dependentes} dep.` : ""} → ${fmt(irrfEspSaldo)}. IRRF sobre 13º (integral): base ${fmt(baseD13ParaInss)} − INSS ${fmt(inssEspD13)} → ${fmt(irrfEspD13)}. Total: ${fmt(irrfEspTotal)}. (13º incide integralmente — natureza salarial, Solução Consulta DISIT/SRRF 1.037/2017.${feriasIndenizadasDeclaradas + tercoIndenizadoDeclarado > 0 ? ` Férias indenizadas e 1/3 indenizado ${fmt(feriasIndenizadasDeclaradas + tercoIndenizadoDeclarado)} excluídos — Súmula 215/386 STJ.` : ""})${hasDivergence ? ` Declarado: ${fmt(irrfDecl)}.` : ""}`,
       legal_citation: hasDivergence ? "Decreto 9.580/18 Art. 688" : null,
       scenarios: null,
       tip: null,
