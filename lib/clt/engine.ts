@@ -932,14 +932,31 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
     diasAvisoEsp = avisoMaxDias;
   }
 
-  // Para projetar dtEfetiva, usa o aviso TOTAL (trabalhado + indenizado) — Súmula 371 TST.
-  // Não usa diasAvisoEsp aqui porque para aviso trabalhado esse já é só a parte indenizada.
+  // ─────────────────────────────────────────────────────────────────────────
+  // PROJEÇÃO DO AVISO PRÉVIO PARA FINS DE 13º, FÉRIAS E FGTS — Súmula 371 TST
+  // ─────────────────────────────────────────────────────────────────────────
+  // A Súmula 371 TST projeta APENAS a parte INDENIZADA do aviso prévio.
+  // Os dias TRABALHADOS de aviso já são tempo de serviço efetivo (a pessoa
+  // foi trabalhar, recebeu salário, é mês normal de contrato) e portanto já
+  // contam naturalmente nos meses trabalhados — não precisam ser "projetados".
+  //
+  // Cenários:
+  // - Justa causa / pedido de demissão: sem projeção (0 dias)
+  // - Acordo mútuo (Art. 484-A): projeta os dias indenizados (= 50% × avisoMaxDias)
+  // - Sem justa causa + aviso INDENIZADO puro: projeta avisoMaxDias completo
+  // - Sem justa causa + aviso TRABALHADO: projeta APENAS (avisoMaxDias - 30),
+  //   porque os 30 dias trabalhados já estão dentro do contrato como tempo real
+  // - Sem justa causa + aviso "nenhum" (raro): sem projeção
+  //
+  // Em todos os cenários onde há indenização, diasAvisoProjecao === diasAvisoEsp.
+  // Quando aviso é trabalhado puro sem dias adicionais (≤ 30 dias devidos),
+  // diasAvisoEsp já é 0 — sem projeção, comportamento correto.
   const diasAvisoProjecao: number | null =
     tipoR === "justa_causa" || tipoR === "pedido_demissao" ? 0
-    : tipoR === "acordo_mutuo" ? diasAvisoEsp
-    : avisoMaxDias;
+    : modalidadeAviso === "nenhum" ? 0
+    : diasAvisoEsp;
 
-  console.log("[AVISO DEBUG] modalidade:", modalidadeAviso, "anosTrab:", anosTrab, "avisoMaxDias:", avisoMaxDias, "diasAvisoEsp (indenizados):", diasAvisoEsp);
+  console.log("[PROJECAO DEBUG] tipoR:", tipoR, "modalidadeAviso:", modalidadeAviso, "avisoMaxDias:", avisoMaxDias, "diasAvisoEsp:", diasAvisoEsp, "diasAvisoProjecao (efetivamente projetados):", diasAvisoProjecao);
 
   // ── Data efetiva de término (aviso prévio projeta o contrato — Súmula 371 TST) ──
   const dtEfetiva = dtRescisao && diasAvisoProjecao !== null
@@ -1065,14 +1082,23 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
   //   - 13º proporcional INTEIRO (tributável + indenizado) — Súmula 63 TST
   //   - Aviso prévio indenizado — Súmula 305 TST
   //   - Férias indenizadas: NÃO sofrem FGTS (não são remuneração de competência)
-  const baseFgtsSaldo = baseSaldoParaInss;
-  const baseFgtsD13   = decimo13Esp ?? 0;   // 13º INTEIRO (não só tributável)
-  const baseFgtsAviso = avisoIndenizado ? (avisoEsp ?? avisoIndenizLine?.declared_value ?? 0) : 0;
+  // ─────────────────────────────────────────────────────────────────────
+  // BASE FGTS — Lei 8.036/90 Art. 15 (versão conservadora)
+  // ─────────────────────────────────────────────────────────────────────
+  // Usa o ESPERADO (mínimo legal) como base. Quando empresa paga acima do
+  // mínimo legal (ex: aviso de 21 dias quando devia indenizar 18), os dias
+  // adicionais não geram exigência adicional de FGTS — interpretação
+  // conservadora que evita controvérsia jurídica em uma cobrança/auditoria.
+  // O empregado se beneficia ao receber a verba a maior; a obrigação de FGTS
+  // permanece sobre o estritamente devido.
+  const baseFgtsSaldo = saldoEsp ?? saldoSalLine?.declared_value ?? 0;
+  const baseFgtsD13   = decimo13Esp ?? 0;
+  const baseFgtsAviso = avisoIndenizado
+    ? (avisoEsp ?? avisoIndenizLine?.declared_value ?? 0)
+    : 0;
   const baseFgtsCalc  = round2(baseFgtsSaldo + baseFgtsD13 + baseFgtsAviso);
   const fgtsEspTotal  = round2(baseFgtsCalc * 0.08);
-  console.log("[RESCISAO DEBUG] === FGTS detalhado ===");
-  console.log("[RESCISAO DEBUG] baseFgtsSaldo:", baseFgtsSaldo, "baseFgtsD13:", baseFgtsD13, "baseFgtsAviso:", baseFgtsAviso);
-  console.log("[RESCISAO DEBUG] baseFgtsCalc:", baseFgtsCalc, "fgtsEspTotal:", fgtsEspTotal);
+  console.log("[FGTS DEBUG] baseFgtsSaldo:", baseFgtsSaldo, "baseFgtsD13:", baseFgtsD13, "baseFgtsAviso:", baseFgtsAviso, "Total base:", baseFgtsSaldo + baseFgtsD13 + baseFgtsAviso);
 
   console.log("[RESCISAO DEBUG] === Datas e tempo ===");
   console.log("[RESCISAO DEBUG] dtAdmissao:", parsed.data_admissao, "→", dtAdmissao);
