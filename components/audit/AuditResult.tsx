@@ -145,11 +145,15 @@ function LineRow({ line }: { line: AuditLine }) {
   const isOk = line.status === "ok";
   const hasNote = isManualCheck
     ? !!(line.scenarios?.length)
-    : !!line.note && (isErr || isWarn || isLegal || isUnverifiable);
+    : !!line.note && (isErr || isWarn || isLegal || isUnverifiable || (line.status === "info" && Math.abs(line.difference) >= 0.05));
   const baseLegal = isOk ? null : (line.legal_citation ?? BASE_LEGAL[line.type] ?? null);
   const hasExpand = !isOk && (hasNote || !!baseLegal);
+  // Info "informativa" sem diferença = compacta. Info COM diferença = comporta como erro/warning, expansível.
+  const isInfoComDiferenca = line.status === "info" && Math.abs(line.difference) >= 0.05;
+  const expandivel = hasExpand || isInfoComDiferenca;
+  const mostrarTresColunas = !isOk || isInfoComDiferenca;
   // Lines with problems get a visible "Entenda →" label; ok/info lines get a subtle chevron
-  const showEntenda = hasExpand && (isErr || isWarn || isLegal || isManualCheck || isUnverifiable);
+  const showEntenda = (hasExpand || isInfoComDiferenca) && (isErr || isWarn || isLegal || isManualCheck || isUnverifiable || isInfoComDiferenca);
 
   // Status dot color
   const dotColor =
@@ -208,7 +212,7 @@ function LineRow({ line }: { line: AuditLine }) {
     )}>
       <button
         type="button"
-        disabled={!hasExpand}
+        disabled={!expandivel}
         onClick={() => setOpen((o) => !o)}
         className="w-full text-left"
         aria-expanded={open}
@@ -220,7 +224,7 @@ function LineRow({ line }: { line: AuditLine }) {
             <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className={cn(
                 "text-sm font-medium truncate",
-                isOk || line.status === "info" ? "text-tc-muted" : "text-tc-ink"
+                (isOk && !isInfoComDiferenca) || (line.status === "info" && !isInfoComDiferenca) ? "text-tc-muted" : "text-tc-ink"
               )}>
                 {line.description}
               </span>
@@ -229,8 +233,8 @@ function LineRow({ line }: { line: AuditLine }) {
               </span>
             </div>
 
-            {/* values — ok/info: só declarado; demais: 3 colunas */}
-            {isOk || line.status === "info" ? (
+            {/* values — ok/info sem diferença: só declarado; demais: 3 colunas */}
+            {!mostrarTresColunas ? (
               <div className="text-xs">
                 <p className="text-tc-muted mb-0.5">No holerite</p>
                 <p className="font-medium tabular text-tc-muted">{brl(line.declared_value)}</p>

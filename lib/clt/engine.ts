@@ -904,21 +904,46 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
   console.log("[CENARIO USADO] usouInferencia:", usouInferencia);
   console.log("[CENARIO USADO] cenarioInferido:", JSON.stringify(cenarioInferido));
 
+  // Modalidade do aviso (trabalhado/indenizado/nenhum) — usuário > inferido > default
+  // cenarioInferido.modalidade_aviso já encapsula a verificação de avisoTrabLine/avisoIndenizLine
+  const modalidadeAviso = parsed.modalidade_aviso
+    ?? cenarioInferido.modalidade_aviso
+    ?? "indenizado";
+
   // ── Dias de aviso prévio esperado ───────────────────────────────────────
   const avisoMaxDias = anosTrab !== null ? calcularDiasAvisoPrevio(anosTrab) : null;
-  console.log("[AVISO DEBUG] anosTrab:", anosTrab, "diasAvisoEsp:", avisoMaxDias);
+
+  // diasAvisoEsp = dias que devem aparecer como INDENIZAÇÃO no TRCT.
+  // - Justa causa / pedido demissão: 0
+  // - Acordo mútuo (Art. 484-A): metade do aviso, inteira indenizada
+  // - Trabalhado: apenas os dias adicionais (> 30) são indenizados; os 30 base
+  //   já foram cumpridos via trabalho e remunerados como salário do mês
+  // - Indenizado puro: todos os dias devidos como indenização
   let diasAvisoEsp: number | null;
   if (tipoR === "justa_causa" || tipoR === "pedido_demissao") {
     diasAvisoEsp = 0;
   } else if (tipoR === "acordo_mutuo") {
     diasAvisoEsp = avisoMaxDias !== null ? Math.round(avisoMaxDias * 0.5) : null;
+  } else if (modalidadeAviso === "trabalhado") {
+    // Aviso trabalhado: 30 dias base cumpridos via trabalho; indeniza apenas os adicionais
+    diasAvisoEsp = avisoMaxDias !== null ? Math.max(0, avisoMaxDias - 30) : null;
   } else {
-    diasAvisoEsp = avisoMaxDias; // sem_justa_causa
+    // Indenizado puro (default sem_justa_causa): todos os dias devidos
+    diasAvisoEsp = avisoMaxDias;
   }
 
+  // Para projetar dtEfetiva, usa o aviso TOTAL (trabalhado + indenizado) — Súmula 371 TST.
+  // Não usa diasAvisoEsp aqui porque para aviso trabalhado esse já é só a parte indenizada.
+  const diasAvisoProjecao: number | null =
+    tipoR === "justa_causa" || tipoR === "pedido_demissao" ? 0
+    : tipoR === "acordo_mutuo" ? diasAvisoEsp
+    : avisoMaxDias;
+
+  console.log("[AVISO DEBUG] modalidade:", modalidadeAviso, "anosTrab:", anosTrab, "avisoMaxDias:", avisoMaxDias, "diasAvisoEsp (indenizados):", diasAvisoEsp);
+
   // ── Data efetiva de término (aviso prévio projeta o contrato — Súmula 371 TST) ──
-  const dtEfetiva = dtRescisao && diasAvisoEsp !== null
-    ? addDiasData(dtRescisao, diasAvisoEsp)
+  const dtEfetiva = dtRescisao && diasAvisoProjecao !== null
+    ? addDiasData(dtRescisao, diasAvisoProjecao)
     : dtRescisao;
 
   // ── Meses para 13º proporcional (CLT Art. 1º §2º Lei 4.090/62) ──────────
@@ -1087,6 +1112,16 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
     }
     const diff = round2(line.declared_value - expectedValue);
     const hasDivergence = Math.abs(diff) > TOLERANCE;
+    let status: LineStatus;
+    if (!hasDivergence) {
+      status = "ok";
+    } else if (line.kind === "credit") {
+      status = diff < 0 ? "error" : "info";
+    } else if (line.kind === "deduction") {
+      status = diff > 0 ? "error" : "info";
+    } else {
+      status = "warning";
+    }
     auditLines.push({
       description: line.description,
       type: line.type,
@@ -1094,11 +1129,11 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
       declared_value: line.declared_value,
       expected_value: expectedValue,
       difference: diff,
-      status: hasDivergence ? (line.kind === "deduction" ? "error" : "error") : "ok",
+      status,
       note: hasDivergence
         ? legalNote(legalCitation ?? "", fmt(line.declared_value), fmt(expectedValue))
         : null,
-      legal_citation: hasDivergence ? legalCitation : null,
+      legal_citation: hasDivergence && status === "error" ? legalCitation : null,
       scenarios: null,
       tip: null,
     });
@@ -1122,17 +1157,16 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
       pushAuditLine(
         avisoLine,
         null,
-        "Lei 12.506/2011 Art. 1º",
-        `Aviso prévio (Lei 12.506/2011 + Tabela MTE 184/2012): 30 dias base + 3 dias por ano completo a partir do 2º ano de serviço. Máximo: 90 dias (atingido em 21 anos). ${anosTrab === null ? "Tempo de serviço não disponível — informe a data de admissão." : `Com ${anosTrab} ano(s) de serviço: ${avisoMaxDias} dias.`} ${remuneracao === null ? "Remuneração mensal não identificada." : `Esperado: ${fmt(round2((remuneracao ?? 0) / 30 * (avisoMaxDias ?? 30)))}.`}`
+        "Lei 12.506/2011 + Tabela MTE 184/2012",
+        `Aviso prévio (Lei 12.506/2011 + Tabela MTE 184/2012): 30 dias base + 3 dias por ano completo a partir do 2º ano de serviço. Máximo: 90 dias. ${anosTrab === null ? "Tempo de serviço não disponível — informe a data de admissão." : `Com ${anosTrab} ano(s) de serviço: ${avisoMaxDias} dias totais.`}${modalidadeAviso === "trabalhado" && avisoMaxDias && avisoMaxDias > 30 ? ` Como foi aviso TRABALHADO, os 30 dias base já foram cumpridos via trabalho — apenas ${avisoMaxDias - 30} dias adicionais devem ser indenizados.` : ""} ${remuneracao === null ? "Remuneração mensal não identificada." : `Esperado como indenização: ${fmt(round2((remuneracao ?? 0) / 30 * (diasAvisoEsp ?? 30)))}.`}`
       );
     } else {
-      const noteBase = avisoEsp !== null && anosTrab !== null
-        ? `Aviso prévio: ${diasAvisoEsp} dias (${anosTrab >= 1 ? `30 + ${anosTrab - 1} × 3` : "30"}${tipoR === "acordo_mutuo" ? ", reduzido em 50% por acordo mútuo" : ""}) × ${fmt(remuneracao ?? 0)}/30 = ${fmt(avisoEsp)}.`
-        : null;
-      pushAuditLine(avisoLine, avisoEsp, "Lei 12.506/2011 Art. 1º", avisoEsp === null ? `Aviso prévio não calculável — informe a data de admissão.` : undefined);
-      if (avisoEsp !== null && !diverge(avisoLine.declared_value, avisoEsp) && noteBase) {
+      pushAuditLine(avisoLine, avisoEsp, "Lei 12.506/2011 + Tabela MTE 184/2012", avisoEsp === null ? `Aviso prévio não calculável — informe a data de admissão.` : undefined);
+      if (avisoEsp !== null && anosTrab !== null) {
         const al = auditLines[auditLines.length - 1];
-        al.note = noteBase;
+        al.note = modalidadeAviso === "trabalhado" && avisoMaxDias && avisoMaxDias > 30
+          ? `Aviso prévio TRABALHADO: ${avisoMaxDias} dias totais devidos pela tabela MTE 184/2012. Os primeiros 30 dias foram cumpridos trabalhando (já remunerados via salário do mês). Restam ${diasAvisoEsp} dias a indenizar: ${fmt(remuneracao ?? 0)}/30 × ${diasAvisoEsp} = ${fmt(avisoEsp)}.${al.status === "info" ? " A empresa pagou mais que o devido — não há erro contra a trabalhadora." : ""}`
+          : `Aviso prévio INDENIZADO: ${diasAvisoEsp} dias (tabela MTE 184/2012${tipoR === "acordo_mutuo" ? "; reduzido em 50% por acordo mútuo" : ""}) × ${fmt(remuneracao ?? 0)}/30 = ${fmt(avisoEsp)}.${al.status === "info" ? " A empresa pagou mais que o devido — não há erro contra a trabalhadora." : ""}`;
       }
     }
   }
