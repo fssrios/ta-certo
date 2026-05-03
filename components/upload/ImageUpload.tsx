@@ -70,6 +70,16 @@ export function applyConditionalAnswers(
     } else if (q.id === "ferias_vencidas") {
       updated.ferias_vencidas_periodos = skipped ? null : (val as number);
       if (skipped) pulados.push(q.noteIfSkipped);
+    } else if (q.id === "data_rescisao") {
+      // Valor esperado: string DD/MM/AAAA ou null (se pulou)
+      // Validação leve: aceita só se casar com regex DD/MM/AAAA
+      if (!skipped && typeof val === "string" && /^\d{2}\/\d{2}\/\d{4}$/.test(val)) {
+        updated.data_rescisao = val;
+      } else {
+        // pulou, "não sei", ou formato inválido — mantém null
+        updated.data_rescisao = null;
+        pulados.push(q.noteIfSkipped);
+      }
     }
   }
 
@@ -582,11 +592,34 @@ function ConditionalQuestions({
   onContinue: () => void;
   onSkipAll: () => void;
 }) {
+  // Controla se o input de data está visível (quando usuário clicou "Quero digitar a data")
+  const [dateInputVisible, setDateInputVisible] = useState(false);
+  const [dateRaw, setDateRaw] = useState("");
+
   function setAnswer(id: MissingInfoQuestion["id"], value: string | number | null) {
     onChange({ ...answers, [id]: value });
   }
 
-  const answeredCount = questions.filter((q) => answers[q.id] !== undefined && answers[q.id] !== null).length;
+  function handleDateInput(raw: string) {
+    // Aplica máscara DD/MM/AAAA enquanto o usuário digita
+    const digits = raw.replace(/\D/g, "").slice(0, 8);
+    let masked = digits;
+    if (digits.length > 4) masked = digits.slice(0, 2) + "/" + digits.slice(2, 4) + "/" + digits.slice(4);
+    else if (digits.length > 2) masked = digits.slice(0, 2) + "/" + digits.slice(2);
+    setDateRaw(masked);
+    // Só confirma como resposta quando o formato DD/MM/AAAA está completo
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(masked)) {
+      setAnswer("data_rescisao", masked);
+    } else {
+      // Enquanto incompleto, mantém __custom__ como marcador de "está digitando"
+      setAnswer("data_rescisao", "__custom__");
+    }
+  }
+
+  const answeredCount = questions.filter((q) => {
+    const v = answers[q.id];
+    return v !== undefined && v !== null && v !== "__custom__";
+  }).length;
   const totalCount = questions.length;
 
   return (
@@ -611,13 +644,29 @@ function ConditionalQuestions({
           <p className="font-semibold text-tc-ink text-sm mb-4">{q.question}</p>
           <div className="flex flex-wrap gap-2">
             {q.options.map((opt) => {
-              const active = answers[q.id] === opt.value || (opt.value === null && answers[q.id] === null && q.id in answers);
+              const isCustom = opt.value === "__custom__";
               const isSkip = opt.value === null;
+              const currentVal = answers[q.id];
+              const active = isCustom
+                ? (currentVal === "__custom__" || (typeof currentVal === "string" && /^\d{2}\/\d{2}\/\d{4}$/.test(currentVal)))
+                : currentVal === opt.value || (isSkip && currentVal === null && q.id in answers);
               return (
                 <button
                   key={String(opt.value)}
                   type="button"
-                  onClick={() => setAnswer(q.id, opt.value)}
+                  onClick={() => {
+                    if (isCustom) {
+                      setDateInputVisible(true);
+                      setDateRaw("");
+                      setAnswer(q.id, "__custom__");
+                    } else {
+                      if (q.id === "data_rescisao") {
+                        setDateInputVisible(false);
+                        setDateRaw("");
+                      }
+                      setAnswer(q.id, opt.value);
+                    }
+                  }}
                   className={cn(
                     "px-4 py-2.5 rounded-xl text-sm font-medium border transition-all",
                     active && !isSkip
@@ -634,6 +683,29 @@ function ConditionalQuestions({
               );
             })}
           </div>
+          {/* Input de data livre para data_rescisao */}
+          {q.id === "data_rescisao" && dateInputVisible && (
+            <div className="mt-3">
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="DD/MM/AAAA"
+                value={dateRaw}
+                onChange={(e) => handleDateInput(e.target.value)}
+                maxLength={10}
+                autoFocus
+                className={cn(
+                  "w-40 px-3 py-2 rounded-xl border text-sm font-medium tabular-nums transition-colors outline-none",
+                  /^\d{2}\/\d{2}\/\d{4}$/.test(dateRaw)
+                    ? "border-tc-green bg-tc-green/5 text-tc-ink"
+                    : "border-tc-line bg-tc-bg text-tc-ink focus:border-tc-accent"
+                )}
+              />
+              {/^\d{2}\/\d{2}\/\d{4}$/.test(dateRaw) && (
+                <p className="text-[11px] text-tc-green font-medium mt-1">Data confirmada</p>
+              )}
+            </div>
+          )}
           {answers[q.id] === null && (
             <p className="text-[11px] text-tc-muted mt-3">
               Padrão: {q.noteIfSkipped}

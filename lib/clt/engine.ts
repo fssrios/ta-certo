@@ -906,10 +906,14 @@ function auditarRescisao(parsed: ParsedHolerite): AuditResult {
   console.log("[CENARIO USADO] usouInferencia:", usouInferencia);
   console.log("[CENARIO USADO] cenarioInferido:", JSON.stringify(cenarioInferido));
 
-  // Modalidade do aviso (trabalhado/indenizado/nenhum) — usuário > inferido > default
-  // cenarioInferido.modalidade_aviso já encapsula a verificação de avisoTrabLine/avisoIndenizLine
-  const modalidadeAviso = parsed.modalidade_aviso
-    ?? cenarioInferido.modalidade_aviso
+  // Modalidade do aviso (trabalhado/indenizado/nenhum)
+  // Prioridade: PDF (evidência forte) > resposta usuário > default
+  // O PDF é fonte primária quando tem rubrica explícita ("Aviso Prévio Indenizado"
+  // ou "Aviso Prévio Trabalhado"). cenarioInferido.modalidade_aviso só vira null
+  // quando NÃO há rubrica de aviso e o tipo de rescisão não é justa_causa nem
+  // pedido_demissao.
+  const modalidadeAviso = cenarioInferido.modalidade_aviso
+    ?? parsed.modalidade_aviso
     ?? "indenizado";
 
   // ── Dias de aviso prévio esperado ───────────────────────────────────────
@@ -3797,7 +3801,7 @@ function round2(n: number) {
 // ── Perguntas condicionais ────────────────────────────────────────────────────
 
 export interface MissingInfoQuestion {
-  id: "dependentes" | "jornada" | "tipo_holerite" | "insalubridade_grau" | "tipo_rescisao" | "anos_servico" | "modalidade_aviso" | "ferias_vencidas";
+  id: "dependentes" | "jornada" | "tipo_holerite" | "insalubridade_grau" | "tipo_rescisao" | "anos_servico" | "modalidade_aviso" | "ferias_vencidas" | "data_rescisao";
   question: string;
   options: Array<{ label: string; value: string | number | null }>;
   defaultValue: string | number | null;
@@ -3887,6 +3891,24 @@ export function getMissingInfo(
 
   // Rescisão: 4 perguntas críticas — sempre mostrar todas as que faltam
   if (tipo === "rescisao") {
+    // Pergunta 0 — Data exata de rescisão (quando o TRCT/holerite não traz)
+    if (!parsed.data_rescisao) {
+      const compStr = parsed.competencia ?? "";
+      const [mes, ano] = compStr.split("/");
+      const labelMes = mes && ano ? ` (em ${mes}/${ano})` : "";
+      questions.push({
+        id: "data_rescisao",
+        question: `Qual foi a data exata da sua demissão${labelMes}?`,
+        options: [
+          { label: "Quero digitar a data", value: "__custom__" },
+          { label: "Não sei", value: null },
+        ],
+        defaultValue: null,
+        impact: "high",
+        noteIfSkipped: "Sem a data exata da rescisão, vários cálculos (saldo de salário, proporcionais de 13º e férias, projeção do aviso) ficam imprecisos. Linhas dependentes serão marcadas como 'verificar'.",
+      });
+    }
+
     // Pergunta 1 — Tipo de rescisão (sempre, mesmo que já exista — pode ser re-análise)
     questions.push({
       id: "tipo_rescisao",
@@ -3925,9 +3947,15 @@ export function getMissingInfo(
       });
     }
 
-    // Pergunta 3 — Modalidade do aviso (não se aplica a justa causa ou pedido de demissão)
+    // Pergunta 3 — Modalidade do aviso
+    // SÓ pergunta se o PDF for ambíguo. Se houver rubrica explícita
+    // ("Aviso Prévio Indenizado" ou "Aviso Prévio Trabalhado"), usa o PDF.
     const tipoR = parsed.tipo_rescisao;
-    if (tipoR !== "justa_causa" && tipoR !== "pedido_demissao") {
+    const cenarioParaModalidade = inferirCenarioRescisao(parsed);
+    const modalidadeEvidenteNoPDF = cenarioParaModalidade.modalidade_aviso !== null;
+    const naoSeAplica = tipoR === "justa_causa" || tipoR === "pedido_demissao";
+
+    if (!naoSeAplica && !modalidadeEvidenteNoPDF) {
       questions.push({
         id: "modalidade_aviso",
         question: "Como foi o aviso prévio?",
